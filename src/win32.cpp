@@ -6,7 +6,7 @@
 
 #include <stdio.h>
 
-LRESULT CALLBACK windowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
+static LRESULT CALLBACK windowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 
 int CALLBACK WinMain(
 	HINSTANCE hInstance,
@@ -17,8 +17,10 @@ int CALLBACK WinMain(
 	const char windowClassName[] = "Shader Baker Class";
 
 	WNDCLASS wc = {};
+	wc.style = CS_VREDRAW | CS_HREDRAW | CS_OWNDC;
 	wc.lpfnWndProc = windowProc;
 	wc.hInstance = hInstance;
+	wc.hCursor = LoadCursor(NULL, IDC_ARROW);
 	wc.lpszClassName = windowClassName;
 
 	RegisterClassA(&wc);
@@ -27,7 +29,7 @@ int CALLBACK WinMain(
 		0,
 		windowClassName,
 		"Shader Baker",
-		WS_OVERLAPPEDWINDOW,
+		WS_MAXIMIZE | WS_OVERLAPPEDWINDOW | WS_VISIBLE,
 		CW_USEDEFAULT, CW_USEDEFAULT,
 		CW_USEDEFAULT, CW_USEDEFAULT,
 		NULL,
@@ -40,8 +42,6 @@ int CALLBACK WinMain(
 		printf("Failed to create window");
 		return 1;
 	}
-
-	ShowWindow(window, nCmdShow);
 
 	MSG message = {};
 	while (GetMessageA(&message, NULL, 0, 0))
@@ -60,8 +60,10 @@ LRESULT CALLBACK windowProc(
 	{
 	case WM_DESTROY:
 		PostQuitMessage(0);
-		return 0;
+		break;
+	default:
+		return DefWindowProc(hwnd, uMsg, wParam, lParam);
 	}
 
-	return DefWindowProc(hwnd, uMsg, wParam, lParam);
+	return 0;
 }
