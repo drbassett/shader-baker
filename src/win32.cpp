@@ -4,7 +4,7 @@
 
 #pragma warning(pop)
 
-int WinMain(
+int CALLBACK WinMain(
 	HINSTANCE hInstance,
 	HINSTANCE hPrevInstance,
 	LPSTR lpCmdLine,
