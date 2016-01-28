@@ -11,7 +11,7 @@ set releaseOptions=/MT /O2 /Oi
 
 set ignoredWarnings=/wd4100
 
-set libraries=User32.lib
+set libraries=Gdi32.lib opengl32.lib User32.lib
 
 mkdir %outputDir% 2> nul
 
