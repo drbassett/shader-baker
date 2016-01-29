@@ -7,12 +7,64 @@
 #include <gl/gl.h>
 #include <stdio.h>
 
+#include "../include/glcorearb.h"
+#include "../include/wglext.h"
+
 //TODO printf does not work with Win32 GUI out of the box. Need to do something with AttachConsole/AllocConsole to make it work.
 #define FATAL(message) printf(message); return 1;
 
 static LRESULT CALLBACK windowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 
-static int initOpenGl(HDC dc)
+// finds a particular extension in a string containting
+// all the extensions, separated by spaces
+static bool hasGlExtension(
+	const char *allExtensions,
+	const char *extensionToFind)
+{
+	while(*allExtensions != 0)
+	{
+		// compare the extensionToFind to the next extension
+		const char *c = extensionToFind;
+		for (;;)
+		{
+			if (*c == 0)
+			{
+				if (*allExtensions == ' ' || *allExtensions == 0)
+				{
+					return true;
+				} else
+				{
+					break;
+				}
+			} else if (*allExtensions == 0)
+			{
+				return false;
+			} else if (*c != *allExtensions)
+			{
+				break;
+			} else
+			{
+				++c;
+				++allExtensions;
+			}
+		}
+
+		// advance to the character after the next space
+		while (*allExtensions != ' ')
+		{
+			++allExtensions;
+			if (*allExtensions == 0)
+			{
+				return false;
+			}
+		}
+		++allExtensions;
+	}
+
+	return false;
+}
+
+static bool initOpenGl(HDC dc)
 {
 	PIXELFORMATDESCRIPTOR pfd = {};
 	pfd.nSize = sizeof(pfd);
@@ -27,27 +79,95 @@ static int initOpenGl(HDC dc)
 	pfd.cRedBits = 8;
 	pfd.cGreenBits = 8;
 	pfd.cBlueBits = 8;
-	int iPfd = ChoosePixelFormat(dc, &pfd);
-	if (!iPfd)
+	int iPfOld = ChoosePixelFormat(dc, &pfd);
+	if (!iPfOld)
 	{
-		FATAL("Could not find a compatible pixel format");
+		return false;
 	}
-	if (SetPixelFormat(dc, iPfd, &pfd) == FALSE)
+	if (SetPixelFormat(dc, iPfOld, &pfd) == FALSE)
 	{
-		FATAL("Could not set the pixel format");
-	}
-
-	HGLRC rc = wglCreateContext(dc);
-	if (!rc)
-	{
-		FATAL("Could not create the OpenGL render context");
-	}
-	if (wglMakeCurrent(dc, rc) == FALSE)
-	{
-		FATAL("Could not set the OpenGL render context");
+		return false;
 	}
 
-	return 0;
+	HGLRC oldRc = wglCreateContext(dc);
+	if (!oldRc || wglMakeCurrent(dc, oldRc) == FALSE)
+	{
+		return false;
+	}
+
+	PFNWGLGETEXTENSIONSSTRINGARBPROC wglGetExtensionsStringARB =
+		(PFNWGLGETEXTENSIONSSTRINGARBPROC) wglGetProcAddress("wglGetExtensionsStringARB");
+	if (!wglGetExtensionsStringARB)
+	{
+		return false;
+	}
+
+	const char *extensions = wglGetExtensionsStringARB(dc);
+	if (!hasGlExtension(extensions, "WGL_ARB_create_context")
+		|| !hasGlExtension(extensions, "WGL_ARB_pixel_format"))
+	{
+		return false;
+	}
+
+	PFNWGLCHOOSEPIXELFORMATARBPROC wglChoosePixelFormatARB =
+		(PFNWGLCHOOSEPIXELFORMATARBPROC) wglGetProcAddress("wglChoosePixelFormatARB");
+	PFNWGLCREATECONTEXTATTRIBSARBPROC wglCreateContextAttribsARB =
+		(PFNWGLCREATECONTEXTATTRIBSARBPROC) wglGetProcAddress("wglCreateContextAttribsARB");
+	if (!wglChoosePixelFormatARB || !wglCreateContextAttribsARB)
+	{
+		return false;
+	}
+
+	int pfAttribsI[] = {
+		WGL_DRAW_TO_WINDOW_ARB, 1,
+		WGL_ACCELERATION_ARB, WGL_FULL_ACCELERATION_ARB,
+		WGL_SUPPORT_OPENGL_ARB, 1,
+		WGL_DOUBLE_BUFFER_ARB, 1,
+		WGL_PIXEL_TYPE_ARB, WGL_TYPE_RGBA_ARB,
+		WGL_COLOR_BITS_ARB, 24,
+		WGL_RED_BITS_ARB, 8,
+		WGL_GREEN_BITS_ARB, 8,
+		WGL_BLUE_BITS_ARB, 8,
+		WGL_DEPTH_BITS_ARB, 16,
+		0};
+	int iPfModern;
+	UINT pfCount;
+	BOOL choosePfResult = wglChoosePixelFormatARB(
+		dc, pfAttribsI, NULL, 1, &iPfModern, &pfCount);
+	if (choosePfResult == FALSE || pfCount == 0)
+	{
+		return false;
+	}
+	
+	pfd = {};
+	if (!DescribePixelFormat(dc, iPfModern, sizeof(pfd), &pfd))
+	{
+		return false;
+	}
+		
+	if (SetPixelFormat(dc, iPfModern, &pfd) == FALSE)
+	{
+		return false;
+	}
+
+	int contextAttribs[] = {
+		WGL_CONTEXT_MAJOR_VERSION_ARB, 3,
+		WGL_CONTEXT_MINOR_VERSION_ARB, 3,
+		WGL_CONTEXT_FLAGS_ARB, WGL_CONTEXT_FORWARD_COMPATIBLE_BIT_ARB,
+		WGL_CONTEXT_PROFILE_MASK_ARB, WGL_CONTEXT_CORE_PROFILE_BIT_ARB,
+		0};
+	HGLRC modernRc = wglCreateContextAttribsARB(dc, 0, contextAttribs);
+	if (!modernRc || wglMakeCurrent(dc, modernRc) == FALSE)
+	{
+		return false;
+	}
+
+	if (wglDeleteContext(oldRc) == FALSE)
+	{
+//TODO log failure
+	}
+
+	return true;
 }
 
 int CALLBACK WinMain(
@@ -85,9 +205,9 @@ int CALLBACK WinMain(
 	}
 
 	HDC dc = GetDC(window);
-	if (initOpenGl(dc) != 0)
+	if (!initOpenGl(dc))
 	{
-		return 1;
+		FATAL("Failed to initialize OpenGL");
 	}
 
 	// cornflower blue
