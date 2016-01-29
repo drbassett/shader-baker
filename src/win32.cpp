@@ -4,11 +4,32 @@
 
 #pragma warning(pop)
 
-#include <gl/gl.h>
 #include <stdio.h>
 
+#include <gl/gl.h>
 #include "../include/glcorearb.h"
 #include "../include/wglext.h"
+#include "glFunctions.cpp"
+
+static const char* VS_SOURCE = R"(
+#version 330
+
+void main()
+{
+	gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
+}
+)";
+
+static const char* FS_SOURCE = R"(
+#version 330
+
+out vec4 color;
+
+void main()
+{
+	color = vec4(0.8, 0.0, 0.0, 1.0);
+}
+)";
 
 //TODO printf does not work with Win32 GUI out of the box. Need to do something with AttachConsole/AllocConsole to make it work.
 #define FATAL(message) printf(message); return 1;
@@ -167,7 +188,62 @@ static bool initOpenGl(HDC dc)
 //TODO log failure
 	}
 
+	if (!initGlFunctions())
+	{
+		return false;
+	}
+
 	return true;
+}
+
+bool compileShaderChecked(
+	GLuint shader,
+	const char* source,
+	GLsizei maxLogLength,
+	GLchar *log,
+	GLsizei& logLength)
+{
+	glShaderSource(shader, 1, &source, 0);
+	glCompileShader(shader);
+
+	GLint compileStatus;
+	glGetShaderiv(shader, GL_COMPILE_STATUS, &compileStatus);
+	if (compileStatus == GL_TRUE)
+	{
+		return true;
+	}
+
+	// GLint infoLogLength;
+	// glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &infoLogLength);
+
+	glGetShaderInfoLog(
+		shader, maxLogLength, &logLength, log);
+
+	return false;
+}
+
+bool linkProgramChecked(
+	GLuint program,
+	GLsizei maxLogLength,
+	GLchar *log,
+	GLsizei& logLength)
+{
+	glLinkProgram(program);
+
+	GLint linkStatus;
+	glGetProgramiv(program, GL_LINK_STATUS, &linkStatus);
+	if (linkStatus == GL_TRUE)
+	{
+		return true;
+	}
+
+	// GLint infoLogLength;
+	// glGetProgramiv(program, GL_INFO_LOG_LENGTH, &infoLogLength);
+
+	glGetProgramInfoLog(
+		program, maxLogLength, &logLength, log);
+
+	return false;
 }
 
 int CALLBACK WinMain(
@@ -213,7 +289,46 @@ int CALLBACK WinMain(
 	// cornflower blue
 	glClearColor(
 		0.3921568627451f, 0.5843137254902f, 0.9294117647059f, 1.0f);
+
+	GLsizei maxLogLength = 1024;
+	GLchar infoLog[1024];
+	GLsizei logLength;
+
+	GLuint vs = glCreateShader(GL_VERTEX_SHADER);
+	GLuint fs = glCreateShader(GL_FRAGMENT_SHADER);
+
+	if (!compileShaderChecked(vs, VS_SOURCE, maxLogLength, infoLog, logLength))
+	{
+		FATAL("Failed to compile vertex shader");
+	}
+	if (!compileShaderChecked(fs, FS_SOURCE, maxLogLength, infoLog, logLength))
+	{
+		FATAL("Failed to compile fragment shader");
+	}
+
+	GLuint program = glCreateProgram();
+	glAttachShader(program, vs);
+	glAttachShader(program, fs);
+	if (!linkProgramChecked(program, maxLogLength, infoLog, logLength))
+	{
+		FATAL("Failed to link program");
+	}
+	glDetachShader(program, vs);
+	glDetachShader(program, fs);
+
+	glDeleteShader(vs);
+	glDeleteShader(fs);
+
+	GLuint vao;
+	glGenVertexArrays(1, &vao);
+
+	glBindVertexArray(vao);
+	glUseProgram(program);
+
 	glClear(GL_COLOR_BUFFER_BIT);
+	glPointSize(10.0f);
+	glDrawArrays(GL_POINTS, 0, 1);
+
 	SwapBuffers(dc);
 
 	MSG message = {};
@@ -222,6 +337,9 @@ int CALLBACK WinMain(
 		TranslateMessage(&message);
 		DispatchMessageA(&message);
 	}
+
+	glDeleteProgram(program);
+	glDeleteVertexArrays(1, &vao);
 
 	return 0;
 }
