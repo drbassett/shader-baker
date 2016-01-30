@@ -123,6 +123,11 @@ bool initApplication(ApplicationState& appState)
 	return true;
 }
 
+void resizeApplication(ApplicationState& appState, int width, int height)
+{
+	glViewport(0, 0, width, height);
+}
+
 void updateApplication(ApplicationState& appState)
 {
 	glBindVertexArray(appState.vao);

@@ -11,6 +11,8 @@
 //TODO printf does not work with Win32 GUI out of the box. Need to do something with AttachConsole/AllocConsole to make it work.
 #define FATAL(message) printf(message); return 1;
 
+ApplicationState appState = {};
+
 static LRESULT CALLBACK windowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 
 // finds a particular extension in a string containting
@@ -213,7 +215,6 @@ int CALLBACK WinMain(
 		FATAL("Failed to initialize OpenGL");
 	}
 	
-	ApplicationState appState = {};
 	if (!initApplication(appState))
 	{
 		FATAL("Failed to initialize application");
@@ -239,9 +240,19 @@ LRESULT CALLBACK windowProc(
 {
 	switch (uMsg)
 	{
+	case WM_SIZE:
+	{
+		if (wParam == SIZE_RESTORED)
+		{
+			auto width = LOWORD(lParam);
+			auto height = HIWORD(lParam);
+			resizeApplication(appState, width, height);
+		}
+	} break;
 	case WM_DESTROY:
+	{
 		PostQuitMessage(0);
-		break;
+	} break;
 	default:
 		return DefWindowProc(hwnd, uMsg, wParam, lParam);
 	}
