@@ -1,5 +1,9 @@
 @echo off
 
+pushd util\genGlFunctionLoader
+call build-windows.bat
+popd
+
 set projectName=shader-baker
 
 set buildDir=build
@@ -18,3 +22,4 @@ mkdir %outputDir% 2> nul
 pushd %outputDir% > nul
 cl.exe /nologo /W4 /WX %ignoredWarnings% %debugOptions% /Gm- %srcDir%\win32.cpp /Fd%projectName% /Fe%projectName% /INCREMENTAL:NO %libraries%
 popd
+

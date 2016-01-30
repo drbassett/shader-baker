@@ -9,7 +9,7 @@
 #include <gl/gl.h>
 #include "../include/glcorearb.h"
 #include "../include/wglext.h"
-#include "glFunctions.cpp"
+#include "generated/glFunctions.cpp"
 
 static const char* VS_SOURCE = R"(
 #version 330
