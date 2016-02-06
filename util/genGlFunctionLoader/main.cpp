@@ -19,17 +19,6 @@ struct FunctionNames
 	char nameStore[1024 * 64];
 };
 
-inline char toUppercase(char c)
-{
-	if (c >= 'a' && c <= 'z')
-	{
-		return c - ('a' - 'A');
-	} else
-	{
-		return c;
-	}
-}
-
 void writeUglyProcName(
 	FunctionName functionName, FILE *file)
 {
@@ -38,7 +27,7 @@ void writeUglyProcName(
 	auto nameLength = functionName.nameLength;
 	for (size_t j = 0; j < nameLength; ++j)
 	{
-		fputc(toUppercase(name[j]), file);
+		fputc(std::toupper(name[j]), file);
 	}
 	fputs("PROC", file);
 }
