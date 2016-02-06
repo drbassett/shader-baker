@@ -20,6 +20,6 @@ set libraries=Gdi32.lib opengl32.lib User32.lib
 mkdir %outputDir% 2> nul
 
 pushd %outputDir% > nul
-cl.exe /nologo /W4 /WX %ignoredWarnings% %debugOptions% /Gm- %srcDir%\win32.cpp /Fd%projectName% /Fe%projectName% /INCREMENTAL:NO %libraries%
+cl.exe /nologo /W4 /WX /EHsc %ignoredWarnings% %debugOptions% /Gm- %srcDir%\win32.cpp /Fd%projectName% /Fe%projectName% /INCREMENTAL:NO %libraries%
 popd
 
