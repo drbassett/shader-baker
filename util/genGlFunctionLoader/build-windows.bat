@@ -4,6 +4,7 @@ set projectName=gen-fcn-ptrs
 
 set outputDir=build
 set srcDir=..
+set genDir=..\..\src\generated
 
 set debugOptions=/MTd /Ob0 /Od /Zi
 
@@ -20,6 +21,6 @@ set buildResult=%ERRORLEVEL%
 popd
 
 IF %buildResult% GEQ 1 EXIT /B 1
-mkdir ..\..\src\generated 2> nul
-build\%projectName%.exe functionNames.txt ..\..\src\generated\glFunctions.cpp
+mkdir %genDir% 2> nul
+build\%projectName%.exe functionNames.txt %genDir%\glFunctions.cpp
 
