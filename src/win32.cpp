@@ -248,6 +248,28 @@ LRESULT CALLBACK windowProc(
 			auto height = HIWORD(lParam);
 			resizeApplication(appState, width, height);
 		}
+
+		HINSTANCE pointLibrary = LoadLibraryA("glPointSize.dll");
+		if (!pointLibrary) {
+			FATAL("Failed to load glPointSize.dll");
+		}
+
+		typedef void (*LPSETGLPOINTSIZE)(GLfloat);
+		LPSETGLPOINTSIZE setPointSize = 
+			(LPSETGLPOINTSIZE) GetProcAddress(pointLibrary, "setPointSize"); 
+ 
+        if (!setPointSize) {
+			FATAL("Failed to find function setPointSize");
+        }
+		
+		// generate a size to pass to glPointSize() using
+		// an arbitrarily chosen scaling factor and the width
+		// of the window
+		const float SCALE = 10.f;
+		GLfloat size = static_cast<GLfloat>(LOWORD(lParam) / SCALE);
+		(setPointSize)(size);
+
+        FreeLibrary(pointLibrary);	
 	} break;
 	case WM_DESTROY:
 	{
