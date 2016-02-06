@@ -6,7 +6,7 @@
 
 #include "ShaderBaker.cpp"
 #include "../include/wglext.h"
-#include <stdio.h>
+#include <cstdio>
 
 //TODO printf does not work with Win32 GUI out of the box. Need to do something with AttachConsole/AllocConsole to make it work.
 #define FATAL(message) printf(message); return 1;
