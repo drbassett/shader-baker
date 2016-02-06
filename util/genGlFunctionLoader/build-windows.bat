@@ -20,6 +20,6 @@ set buildResult=%ERRORLEVEL%
 popd
 
 IF %buildResult% GEQ 1 EXIT /B 1
-
-build\%projectName%.exe functionNames.txt ../../src/generated/glFunctions.cpp
+mkdir ..\..\src\generated 2> nul
+build\%projectName%.exe functionNames.txt ..\..\src\generated\glFunctions.cpp
 
