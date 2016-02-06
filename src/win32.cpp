@@ -133,8 +133,8 @@ static bool initOpenGl(HDC dc)
 	int iPfModern;
 	UINT pfCount;
 	BOOL choosePfResult = wglChoosePixelFormatARB(
-		dc, pfAttribsI, NULL, 1, &iPfModern, &pfCount);
-	if (choosePfResult == FALSE || pfCount == 0)
+		dc, pfAttribsI, nullptr, 1, &iPfModern, &pfCount);
+	if (choosePfResult == false || pfCount == 0)
 	{
 		return false;
 	}
@@ -187,7 +187,7 @@ int CALLBACK WinMain(
 	wc.style = CS_VREDRAW | CS_HREDRAW | CS_OWNDC;
 	wc.lpfnWndProc = windowProc;
 	wc.hInstance = hInstance;
-	wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+	wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
 	wc.lpszClassName = windowClassName;
 
 	RegisterClassA(&wc);
@@ -199,10 +199,10 @@ int CALLBACK WinMain(
 		WS_MAXIMIZE | WS_OVERLAPPEDWINDOW | WS_VISIBLE,
 		CW_USEDEFAULT, CW_USEDEFAULT,
 		CW_USEDEFAULT, CW_USEDEFAULT,
-		NULL,
-		NULL,
+		nullptr,
+		nullptr,
 		hInstance,
-		NULL);
+		nullptr);
 
 	if (!window)
 	{
@@ -221,7 +221,7 @@ int CALLBACK WinMain(
 	}
 
 	MSG message = {};
-	while (GetMessageA(&message, NULL, 0, 0))
+	while (GetMessageA(&message, nullptr, 0, 0))
 	{
 		TranslateMessage(&message);
 		DispatchMessageA(&message);
