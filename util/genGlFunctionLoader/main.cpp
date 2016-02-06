@@ -1,5 +1,6 @@
-#include <stdio.h>
-#include <stdlib.h>
+#include <cstdio>
+#include <cstdlib>
+#include <cctype>
 
 #define MallocStruct(type) (type*) malloc(sizeof(type))
 #define ArrayLength(a) (sizeof(a) / sizeof(a[0]))
@@ -18,32 +19,6 @@ struct FunctionNames
 	char nameStore[1024 * 64];
 };
 
-inline bool isWhitespace(char c)
-{
-	switch (c)
-	{
-	case '\n':
-	case '\r':
-	case ' ':
-	case '\t':
-		return true;
-	default:
-		return false;
-	}
-
-}
-
-inline char toUppercase(char c)
-{
-	if (c >= 'a' && c <= 'z')
-	{
-		return c - ('a' - 'A');
-	} else
-	{
-		return c;
-	}
-}
-
 void writeUglyProcName(
 	FunctionName functionName, FILE *file)
 {
@@ -52,7 +27,7 @@ void writeUglyProcName(
 	auto nameLength = functionName.nameLength;
 	for (size_t j = 0; j < nameLength; ++j)
 	{
-		fputc(toUppercase(name[j]), file);
+		fputc(std::toupper(name[j]), file);
 	}
 	fputs("PROC", file);
 }
@@ -97,13 +72,13 @@ int main(int argc, char** argv)
 	char *nameStoreEnd = functionNames->nameStore + numCharsInFile;
 	for(;;)
 	{
-		while (nameStart != nameStoreEnd && isWhitespace(*nameStart))
+		while (nameStart != nameStoreEnd && std::isspace(*nameStart))
 		{
 			++nameStart;
 		}
 
 		char *nameEnd = nameStart;
-		while (nameEnd != nameStoreEnd && !isWhitespace(*nameEnd))
+		while (nameEnd != nameStoreEnd && !std::isspace(*nameEnd))
 		{
 			++nameEnd;
 		}
