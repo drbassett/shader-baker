@@ -84,13 +84,13 @@ static bool initOpenGl(HDC dc)
 	{
 		return false;
 	}
-	if (SetPixelFormat(dc, iPfOld, &pfd) == FALSE)
+	if (SetPixelFormat(dc, iPfOld, &pfd) == false)
 	{
 		return false;
 	}
 
 	HGLRC oldRc = wglCreateContext(dc);
-	if (!oldRc || wglMakeCurrent(dc, oldRc) == FALSE)
+	if (!oldRc || wglMakeCurrent(dc, oldRc) == false)
 	{
 		return false;
 	}
@@ -133,8 +133,8 @@ static bool initOpenGl(HDC dc)
 	int iPfModern;
 	UINT pfCount;
 	BOOL choosePfResult = wglChoosePixelFormatARB(
-		dc, pfAttribsI, NULL, 1, &iPfModern, &pfCount);
-	if (choosePfResult == FALSE || pfCount == 0)
+		dc, pfAttribsI, nullptr, 1, &iPfModern, &pfCount);
+	if (choosePfResult == false || pfCount == 0)
 	{
 		return false;
 	}
@@ -145,7 +145,7 @@ static bool initOpenGl(HDC dc)
 		return false;
 	}
 		
-	if (SetPixelFormat(dc, iPfModern, &pfd) == FALSE)
+	if (SetPixelFormat(dc, iPfModern, &pfd) == false)
 	{
 		return false;
 	}
@@ -157,12 +157,12 @@ static bool initOpenGl(HDC dc)
 		WGL_CONTEXT_PROFILE_MASK_ARB, WGL_CONTEXT_CORE_PROFILE_BIT_ARB,
 		0};
 	HGLRC modernRc = wglCreateContextAttribsARB(dc, 0, contextAttribs);
-	if (!modernRc || wglMakeCurrent(dc, modernRc) == FALSE)
+	if (!modernRc || wglMakeCurrent(dc, modernRc) == false)
 	{
 		return false;
 	}
 
-	if (wglDeleteContext(oldRc) == FALSE)
+	if (wglDeleteContext(oldRc) == false)
 	{
 //TODO log failure
 	}
@@ -187,7 +187,7 @@ int CALLBACK WinMain(
 	wc.style = CS_VREDRAW | CS_HREDRAW | CS_OWNDC;
 	wc.lpfnWndProc = windowProc;
 	wc.hInstance = hInstance;
-	wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+	wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
 	wc.lpszClassName = windowClassName;
 
 	RegisterClassA(&wc);
@@ -199,10 +199,10 @@ int CALLBACK WinMain(
 		WS_MAXIMIZE | WS_OVERLAPPEDWINDOW | WS_VISIBLE,
 		CW_USEDEFAULT, CW_USEDEFAULT,
 		CW_USEDEFAULT, CW_USEDEFAULT,
-		NULL,
-		NULL,
+		nullptr,
+		nullptr,
 		hInstance,
-		NULL);
+		nullptr);
 
 	if (!window)
 	{
@@ -221,7 +221,7 @@ int CALLBACK WinMain(
 	}
 
 	MSG message = {};
-	while (GetMessageA(&message, NULL, 0, 0))
+	while (GetMessageA(&message, nullptr, 0, 0))
 	{
 		TranslateMessage(&message);
 		DispatchMessageA(&message);
