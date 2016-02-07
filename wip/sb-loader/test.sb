@@ -1,0 +1,42 @@
+Version{0.1}
+
+emptyPath VertexShader{''}
+singleQuotePath VertexShader{''''}
+quotedPath VertexShader{'''quote-ception'''}
+quoteInCenter VertexShader{'a''b'}
+spacesInPath VertexShader{' a b '}
+newlinesInPath VertexShader
+{'
+path
+with
+newlines
+'}
+
+vs VertexShader{'vert.glsl'}
+tc TessControlShader{'tesscon.glsl'}
+ts TessEvalShader{'tesseval.glsl'}
+gs GeometryShader{'geom.glsl'}
+fs FragmentShader{'frag.glsl'}
+cs ComputeShader{'compute.glsl'}
+
+simpleProgram Program{vs, fs}
+complexProgram Program{vs, tc, ts, gs, fs}
+computeProgram Program{cs}
+
+drawPoint RenderConfig{
+	Program{simpleProgram}
+	Primitive{Points}
+	Count{1}
+}
+
+drawTriangle RenderConfig{
+	Program{simpleProgram}
+	Primitive{Triangles}
+	Count{3}
+}
+
+drawTesselatedTriangle RenderConfig{
+	Program{comlexProgram}
+	Primitive{Triangles}
+	Count{3}
+}
