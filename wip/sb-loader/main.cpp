@@ -13,31 +13,16 @@
 //     single quote
 
 #include <cassert>
+#include <cstdlib>
 
 #include "loader.h"
 #include "parser.h"
 
-#include <cstdio>
-#include <cstdlib>
-
 #define ArrayLength(a) sizeof(a) / sizeof(a[0])
-#define ArrayEnd(a) (a) + sizeof(a) / sizeof(a[0])
 
-struct ApplicationState
+struct SubString
 {
-	char rawContents[1 << 16];
-	size_t rawContentsLength;
-
-	ShaderDefinition shaders[1024];
-	ProgramDefinition programs[1024];
-
-	// storage for the names of shaders attached to a program
-	StringSlice attachedShaderNames[4096];
-
-	RenderConfig renderConfigs[1024];
-
-	// 64 errors should be plenty for a person to deal with at once
-	ParseError parseErrors[64];
+	size_t begin, length;
 };
 
 struct ParseResult
@@ -55,6 +40,106 @@ struct ParseResult
 
 	ParseError *errorsBegin;
 	ParseError *errorsEnd;
+};
+
+inline size_t megabytes(size_t n)
+{
+	return 1024 * 1024 * n;
+}
+
+struct MemoryArena
+{
+	char *begin, *end;
+	char *next;
+	size_t growSize;
+};
+
+bool memoryArenaInit(MemoryArena& arena, size_t initialSize, size_t growSize)
+{
+	auto memory = (char*) malloc(initialSize);
+	if (!memory)
+	{
+		return false;
+	}
+
+	arena.begin = memory;
+	arena.end = memory + initialSize;
+	arena.next = memory;
+	arena.growSize = growSize;
+	return true;
+}
+
+void memoryArenaDestroy(MemoryArena& arena)
+{
+	free(arena.begin);
+}
+
+void memoryArenaReallocate(MemoryArena& arena)
+{
+//TODO check for overflow in calculation of newSize
+	auto newSize = arena.end - arena.begin + arena.growSize;
+	auto memory = (char*) realloc(arena.begin, newSize);
+	if (!memory)
+	{
+//TODO out-of-memory. How should this case be handled? Crash the program?
+		memoryArenaDestroy(arena);
+		assert(false);
+	}
+
+	arena.next = arena.next - arena.begin + memory;
+	arena.begin = memory;
+	arena.end = memory + newSize;
+}
+
+void* memoryArenaAllocate(MemoryArena& arena, size_t size)
+{
+//TODO check for overflow in calculation of requiredSize
+	size_t requiredSize = arena.next - arena.begin + size;
+
+	// Use a while loop in case the allocation is very large. This case should rarely,
+	// if ever - the arena's reallocation size should be tuned to prevent this.
+	while ((size_t) (arena.end - arena.begin) < requiredSize)
+	{
+		memoryArenaReallocate(arena);
+	}
+
+	auto result = arena.next;
+	arena.next += size;
+
+	return result;
+}
+
+void memoryArenaFree(MemoryArena& arena, size_t size)
+{
+	assert((size_t) arena.next - (size_t) arena.begin >= size);
+	arena.next -= size;
+}
+
+size_t memoryArenaIndex(MemoryArena& arena)
+{
+	return arena.next - arena.begin;
+}
+
+
+
+#include <cstdio>
+
+#define ArrayEnd(a) (a) + sizeof(a) / sizeof(a[0])
+
+struct ApplicationState
+{
+	MemoryArena transientArena;
+
+	ShaderDefinition shaders[1024];
+	ProgramDefinition programs[1024];
+
+	// storage for the names of shaders attached to a program
+	StringSlice attachedShaderNames[4096];
+
+	RenderConfig renderConfigs[1024];
+
+	// 64 errors should be plenty for a person to deal with at once
+	ParseError parseErrors[64];
 };
 
 char* parseErrorTypeToStr(ParseErrorType errorType)
@@ -226,7 +311,7 @@ void printParseResult(ParseResult& result)
 	}
 }
 
-static bool readProjectFile(ApplicationState& appState, char *fileName)
+static bool readProjectFile(MemoryArena& arena, char *fileName, SubString& result)
 {
 	auto file = fopen(fileName, "rb");
 	if (!file)
@@ -234,12 +319,22 @@ static bool readProjectFile(ApplicationState& appState, char *fileName)
 		perror("Failed to open project file\n");
 		return false;
 	}
-	auto fileSize = fread(
-		appState.rawContents,
-		sizeof(appState.rawContents[0]),
-		sizeof(appState.rawContents),
-		file);
-	appState.rawContentsLength = fileSize;
+
+	result.begin = memoryArenaIndex(arena);
+	size_t blockSize = 4096;
+	for (;;)
+	{
+		auto readAddress = memoryArenaAllocate(arena, blockSize);
+		auto readSize = fread(readAddress, sizeof(char), blockSize, file);
+		if (readSize < blockSize)
+		{
+			auto extraBytes = blockSize - readSize;
+			memoryArenaFree(arena, extraBytes);
+			break;
+		}
+	}
+	result.length = memoryArenaIndex(arena) - result.begin;
+
 	auto readFileError = ferror(file);
 	if (readFileError)
 	{
@@ -249,25 +344,23 @@ static bool readProjectFile(ApplicationState& appState, char *fileName)
 		readFileError = !feof(file);
 		if (readFileError)
 		{
-			perror("Not enough memory to read input file\n");
+			puts("Failed to read the entire project file\n");
 		}
 	}
+
 	if (fclose(file) != 0)
 	{
-		perror("WARNING: failed to close project file\n");
-	}
-	if (readFileError)
-	{
-		return false;
+		puts("WARNING: ");
+		perror("failed to close project file\n");
 	}
 
-	return true;
+	return readFileError == 0;
 }
 
-void initParser(ApplicationState& appState, Parser& parser)
+void initParser(ApplicationState& appState, Parser& parser, StringSlice input)
 {
-	parser.cursor = appState.rawContents;
-	parser.end = appState.rawContents + appState.rawContentsLength;
+	parser.cursor = input.begin;
+	parser.end = input.end;
 	parser.nextShaderSlot = appState.shaders;
 	parser.shadersEnd = ArrayEnd(appState.shaders);
 	parser.nextProgramSlot = appState.programs;
@@ -286,15 +379,17 @@ int main(int argc, char **argv)
 {
 	if (argc != 2)
 	{
-		printf("Usage: sbc projectFile\n");
+		printf("Usage: sb-load projectFile\n");
 		return 0;
 	}
 	auto projectFileName = argv[1];
 
 	auto appState = (ApplicationState*) malloc(sizeof(ApplicationState));
+	memoryArenaInit(appState->transientArena, megabytes(1), megabytes(1));
 
-	auto result = 0;
-	if (!readProjectFile(*appState, projectFileName))
+	int result = 0;
+	SubString projectFileContents;
+	if (!readProjectFile(appState->transientArena, projectFileName, projectFileContents))
 	{
 		result = 1;
 		goto cleanup;
@@ -302,7 +397,10 @@ int main(int argc, char **argv)
 
 	{
 		Parser parser = {};
-		initParser(*appState, parser);
+		StringSlice input = {};
+		input.begin = appState->transientArena.begin + projectFileContents.begin;
+		input.end = input.begin + projectFileContents.length;
+		initParser(*appState, parser, input);
 		parse(parser);
 
 		ParseResult parseResult = {};
@@ -318,6 +416,7 @@ int main(int argc, char **argv)
 	}
 
 cleanup:
+	memoryArenaDestroy(appState->transientArena);
 	free(appState);
 	return result;
 }
