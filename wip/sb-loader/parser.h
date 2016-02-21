@@ -50,17 +50,8 @@ struct Parser
 
 	Version version;
 
-	ShaderDefinition *nextShaderSlot;
-	ShaderDefinition *shadersEnd;
-
-	ProgramDefinition *nextProgramSlot;
-	ProgramDefinition *programsEnd;
-
-	StringSlice *nextAttachedShaderSlot;
-	StringSlice *attachedShadersEnd;
-
-	RenderConfig *nextRenderConfigSlot;
-	RenderConfig *renderConfigsEnd;
+	char *nextElementBegin;
+	char *elementsEnd;
 
 	ParseError *nextErrorSlot;
 	ParseError *errorsEnd;
@@ -89,63 +80,84 @@ static void addParseError(Parser& parser, ParseErrorType const& error)
 	}
 }
 
-static bool addShaderDefinition(Parser& parser, ShaderDefinition const& shader)
+inline static void* reserveElementMemory(Parser& parser, size_t size)
 {
-	if (parser.nextShaderSlot != parser.shadersEnd)
+	auto remainingSize = (size_t) parser.elementsEnd - (size_t) parser.nextElementBegin;
+	if (remainingSize < size)
 	{
-		*parser.nextShaderSlot = shader;
-		++parser.nextShaderSlot;
-		return true;
-	} else
-	{
-		return false;
+//TODO use a dynamically-size structure for elements, and grow it here
+		return nullptr;
 	}
+
+	auto pElement = parser.nextElementBegin;
+	parser.nextElementBegin += size;
+	return pElement;
 }
 
-static bool addProgramDefinition(Parser& parser, ProgramDefinition const& program)
+inline static void* reserveElementSlot(Parser& parser, ElementType elementType, size_t elementSize)
 {
-	if (parser.nextProgramSlot != parser.programsEnd)
+	auto requiredSize = sizeof(elementType) + elementSize;
+	auto memory = reserveElementMemory(parser, requiredSize);
+	if (memory == nullptr)
 	{
-		*parser.nextProgramSlot = program;
-		++parser.nextProgramSlot;
-		return true;
-	} else
-	{
-		return false;
+		return nullptr;
 	}
+
+	auto pElementType = (ElementType*) memory;
+	*pElementType = elementType;
+	auto pElement = pElementType + 1;
+	return pElement;
 }
 
-static void initAttachedShaders(Parser& parser, ProgramDefinition& program)
+static ShaderDefinition* addShaderDefinition(Parser& parser)
 {
-	program.shadersBegin = parser.nextAttachedShaderSlot;
-	program.shadersEnd = parser.nextAttachedShaderSlot;
+	auto elementSlot = (ShaderDefinition*) reserveElementSlot(
+		parser, ElementType::ShaderDefinition, sizeof(ShaderDefinition));
+	if (elementSlot == nullptr)
+	{
+		return nullptr;
+	}
+
+	*elementSlot = {};
+	return elementSlot;
 }
 
-static bool attachShaderToProgram(Parser& parser, ProgramDefinition& program, StringSlice shaderName)
+static ProgramDefinition* addProgramDefinition(Parser& parser)
 {
-	if (parser.nextAttachedShaderSlot != parser.attachedShadersEnd)
+	auto elementSlot = (ProgramDefinition*) reserveElementSlot(
+		parser, ElementType::ProgramDefinition, sizeof(ProgramDefinition));
+	if (elementSlot == nullptr)
 	{
-		*parser.nextAttachedShaderSlot = shaderName;
-		++parser.nextAttachedShaderSlot;
-		++program.shadersEnd;
-		return true;
-	} else
-	{
-		return false;
+		return nullptr;
 	}
+
+	*elementSlot = {};
+	return elementSlot;
+}
+
+static StringSlice* addAttachedShader(Parser& parser)
+{
+	auto elementSlot = (StringSlice*) reserveElementMemory(parser, sizeof(StringSlice));
+	if (elementSlot == nullptr)
+	{
+		return nullptr;
+	}
+
+	*elementSlot = {};
+	return elementSlot;
 }
 
 static bool addRenderConfig(Parser& parser, RenderConfig const& renderConfig)
 {
-	if (parser.nextRenderConfigSlot != parser.renderConfigsEnd)
-	{
-		*parser.nextRenderConfigSlot = renderConfig;
-		++parser.nextRenderConfigSlot;
-		return true;
-	} else
+	auto elementSlot = (RenderConfig*) reserveElementSlot(
+		parser, ElementType::RenderConfig, sizeof(renderConfig));
+	if (elementSlot == nullptr)
 	{
 		return false;
 	}
+
+	*elementSlot = renderConfig;
+	return true;
 }
 
 static inline bool isDigit(char c)
@@ -165,8 +177,6 @@ static inline bool isUppercase(char c)
 
 static inline void skipNextCharacter(Parser& parser, char c)
 {
-	assert(parser.cursor != parser.end);
-
 	if (parser.cursor != parser.end && *parser.cursor == c)
 	{
 		++parser.cursor;
@@ -567,15 +577,16 @@ static bool readShaderDefinition(Parser& parser, StringSlice name, ShaderType ty
 		return false;
 	}
 
-	ShaderDefinition shader = {};
-	shader.name = name;
-	shader.type = type;
-	shader.path = path;
-	if (!addShaderDefinition(parser, shader))
+	ShaderDefinition* shader = addShaderDefinition(parser);
+	if (shader == nullptr)
 	{
 		addParseError(parser, ParseErrorType::ExceededMaxShaderCount);
 		return false;
 	}
+
+	shader->name = name;
+	shader->type = type;
+	shader->path = path;
 
 	return true;
 }
@@ -649,9 +660,14 @@ void parse(Parser& parser)
 			}
 		} else if (type == "Program")
 		{
-			ProgramDefinition program = {};
-			program.name = identifier;
-			initAttachedShaders(parser, program);
+			ProgramDefinition* program = addProgramDefinition(parser);
+			if (program == nullptr)
+			{
+				addParseError(parser, ParseErrorType::ExceededMaxProgramCount);
+				return;
+			}
+
+			program->name = identifier;
 			for (;;)
 			{
 				StringSlice shaderName;
@@ -664,18 +680,16 @@ void parse(Parser& parser)
 				{
 					break;
 				}
-				
-				if (!attachShaderToProgram(parser, program, shaderName))
+
+				StringSlice* shaderNameSlot = addAttachedShader(parser);
+				if (shaderNameSlot == nullptr)
 				{
 					addParseError(parser, ParseErrorType::ExceededMaxAttachedShaderCount);
 					return;
 				}
-			}
 
-			if (!addProgramDefinition(parser, program))
-			{
-				addParseError(parser, ParseErrorType::ExceededMaxProgramCount);
-				return;
+				*shaderNameSlot = shaderName;
+				++program->attachedShaderCount;
 			}
 		} else if (type == "RenderConfig")
 		{

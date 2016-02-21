@@ -29,14 +29,8 @@ struct ParseResult
 {
 	Version version;
 	
-	ShaderDefinition *shadersBegin;
-	ShaderDefinition *shadersEnd;
-
-	ProgramDefinition *programsBegin;
-	ProgramDefinition *programsEnd;
-
-	RenderConfig *renderConfigsBegin;
-	RenderConfig *renderConfigsEnd;
+	char *elementsBegin;
+	char *elementsEnd;
 
 	ParseError *errorsBegin;
 	ParseError *errorsEnd;
@@ -130,13 +124,7 @@ struct ApplicationState
 {
 	MemoryArena transientArena;
 
-	ShaderDefinition shaders[1024];
-	ProgramDefinition programs[1024];
-
-	// storage for the names of shaders attached to a program
-	StringSlice attachedShaderNames[4096];
-
-	RenderConfig renderConfigs[1024];
+	char elements[1024 * 1024 * 1];
 
 	// 64 errors should be plenty for a person to deal with at once
 	ParseError parseErrors[64];
@@ -250,6 +238,45 @@ void printStringSlice(StringSlice str)
 	}
 }
 
+void printShaderDefinition(ShaderDefinition const& shader)
+{
+	printf("%sShader ", shaderTypeToStr(shader.type));
+	printStringSlice(shader.name);
+	fputs(": path = \"", stdout);
+	printStringSlice(shader.path);
+	fputs("\"\n", stdout);
+}
+
+char* printProgramDefinition(char *pProgram)
+{
+	auto program = *((ProgramDefinition*) pProgram);
+	auto attachedShader = (StringSlice*) (pProgram + sizeof(ProgramDefinition));
+	auto attachedShadersEnd = attachedShader + program.attachedShaderCount;
+
+	fputs("Program ", stdout);
+	printStringSlice(program.name);
+	fputs(": ", stdout);
+	while (attachedShader != attachedShadersEnd)
+	{
+		printStringSlice(*attachedShader);
+		fputs(", ", stdout);
+		++attachedShader;
+	}
+	putchar('\n');
+	return (char*) attachedShader;
+}
+
+void printRenderConfig(RenderConfig const& config)
+{
+	fputs("RenderConfig ", stdout);
+	printStringSlice(config.name);
+	printf(": renders count=%d ", config.drawCount);
+	printStringSlice(config.primitive);
+	fputs(" with program '", stdout);
+	printStringSlice(config.programName);
+	fputs("'\n", stdout);
+}
+
 void printParseResult(ParseResult& result)
 {
 	bool hasErrors = result.errorsBegin != result.errorsEnd;
@@ -262,50 +289,28 @@ void printParseResult(ParseResult& result)
 		auto version = result.version;
 		printf("Version %d.%d\n", version.major, version.minor);
 
-		printf("\n\nSHADERS:\n");
+		auto pElements = result.elementsBegin;
+		while (pElements != result.elementsEnd)
 		{
-			auto shader = result.shadersBegin;
-			while (shader != result.shadersEnd)
+			auto elementType = *((ElementType*) pElements);
+			auto pElement = pElements + sizeof(elementType);
+			pElements += sizeof(elementType);
+			switch (elementType)
 			{
-				printStringSlice(shader->name);
-				printf(": %s shader at path \"", shaderTypeToStr(shader->type));
-				printStringSlice(shader->path);
-				fputs("\"\n", stdout);
-				++shader;
-			}
-		}
-
-		printf("\n\nPROGRAMS:\n");
-		{
-			auto program = result.programsBegin;
-			while (program != result.programsEnd)
-			{
-				printStringSlice(program->name);
-				fputs(": ", stdout);
-				auto attachedShader = program->shadersBegin;
-				while (attachedShader != program->shadersEnd)
-				{
-					printStringSlice(*attachedShader);
-					fputs(", ", stdout);
-					++attachedShader;
-				}
-				putchar('\n');
-				++program;
-			}
-		}
-
-		printf("\n\nRENDERING CONFIGURATIONS:\n");
-		{
-			auto config = result.renderConfigsBegin;
-			while (config != result.renderConfigsEnd)
-			{
-				printStringSlice(config->name);
-				printf(": renders count=%d ", config->drawCount);
-				printStringSlice(config->primitive);
-				fputs(" with program '", stdout);
-				printStringSlice(config->programName);
-				fputs("'\n", stdout);
-				++config;
+			case ElementType::ShaderDefinition:
+				printShaderDefinition(*((ShaderDefinition*) pElement));
+				pElements += sizeof(ShaderDefinition);
+				break;
+			case ElementType::ProgramDefinition:
+				pElements = printProgramDefinition(pElement);
+				break;
+			case ElementType::RenderConfig:
+				printRenderConfig(*((RenderConfig*) pElement));
+				pElements += sizeof(RenderConfig);
+				break;
+			default:
+				unreachable();
+				break;
 			}
 		}
 	}
@@ -361,16 +366,13 @@ void initParser(ApplicationState& appState, Parser& parser, StringSlice input)
 {
 	parser.cursor = input.begin;
 	parser.end = input.end;
-	parser.nextShaderSlot = appState.shaders;
-	parser.shadersEnd = ArrayEnd(appState.shaders);
-	parser.nextProgramSlot = appState.programs;
-	parser.programsEnd = ArrayEnd(appState.programs);
-	parser.nextAttachedShaderSlot = appState.attachedShaderNames;
-	parser.attachedShadersEnd = ArrayEnd(appState.attachedShaderNames);
-	parser.nextRenderConfigSlot = appState.renderConfigs;
-	parser.renderConfigsEnd = ArrayEnd(appState.renderConfigs);
+
+	parser.nextElementBegin = appState.elements;
+	parser.elementsEnd = ArrayEnd(appState.elements);
+
 	parser.nextErrorSlot = appState.parseErrors;
 	parser.errorsEnd = ArrayEnd(appState.parseErrors);
+
 	parser.lineNumber = 1;
 	parser.lineBegin = parser.cursor;
 }
@@ -396,22 +398,22 @@ int main(int argc, char **argv)
 	}
 
 	{
-		Parser parser = {};
 		StringSlice input = {};
 		input.begin = appState->transientArena.begin + projectFileContents.begin;
 		input.end = input.begin + projectFileContents.length;
+
+		Parser parser = {};
 		initParser(*appState, parser, input);
 		parse(parser);
 
 		ParseResult parseResult = {};
-		parseResult.shadersBegin = appState->shaders;
-		parseResult.shadersEnd = parser.nextShaderSlot;
-		parseResult.programsBegin = appState->programs;
-		parseResult.programsEnd = parser.nextProgramSlot;
-		parseResult.renderConfigsBegin = appState->renderConfigs;
-		parseResult.renderConfigsEnd = parser.nextRenderConfigSlot;
+
+		parseResult.elementsBegin = appState->elements;
+		parseResult.elementsEnd = parser.nextElementBegin;
+
 		parseResult.errorsBegin = appState->parseErrors;
 		parseResult.errorsEnd = parser.nextErrorSlot;
+
 		printParseResult(parseResult);
 	}
 

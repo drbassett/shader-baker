@@ -3,6 +3,13 @@ struct StringSlice
 	char *begin, *end;
 };
 
+enum struct ElementType
+{
+	ShaderDefinition,
+	ProgramDefinition,
+	RenderConfig
+};
+
 enum struct ShaderType
 {
 	Vertex,
@@ -23,8 +30,7 @@ struct ShaderDefinition
 struct ProgramDefinition
 {
 	StringSlice name;
-	StringSlice *shadersBegin;
-	StringSlice *shadersEnd;
+	size_t attachedShaderCount;
 };
 
 struct RenderConfig
