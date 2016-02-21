@@ -53,6 +53,10 @@ struct Parser
 	char *nextElementBegin;
 	char *elementsEnd;
 
+	unsigned shaderCount;
+	unsigned programCount;
+	unsigned renderConfigCount;
+
 	ParseError *nextErrorSlot;
 	ParseError *errorsEnd;
 };
@@ -563,10 +567,10 @@ exitLoop:
 	{
 		addParseError(parser, ParseErrorType::ExceededMaxRenderConfigCount);
 		return false;
-	} else
-	{
-		return true;
 	}
+
+	++parser.renderConfigCount;
+	return true;
 }
 
 static bool readShaderDefinition(Parser& parser, StringSlice name, ShaderType type)
@@ -587,6 +591,7 @@ static bool readShaderDefinition(Parser& parser, StringSlice name, ShaderType ty
 	shader->name = name;
 	shader->type = type;
 	shader->path = path;
+	++parser.shaderCount;
 
 	return true;
 }
@@ -668,6 +673,8 @@ void parse(Parser& parser)
 			}
 
 			program->name = identifier;
+			++parser.programCount;
+
 			for (;;)
 			{
 				StringSlice shaderName;

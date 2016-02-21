@@ -29,6 +29,10 @@ struct ParseResult
 {
 	Version version;
 	
+	unsigned shaderCount;
+	unsigned programCount;
+	unsigned renderConfigCount;
+
 	char *elementsBegin;
 	char *elementsEnd;
 
@@ -289,6 +293,12 @@ void printParseResult(ParseResult& result)
 		auto version = result.version;
 		printf("Version %d.%d\n", version.major, version.minor);
 
+		printf(
+			"Found %d shaders, %d programs, %d rendering configurations\n\n",
+			result.shaderCount,
+			result.programCount,
+			result.renderConfigCount);
+
 		auto pElements = result.elementsBegin;
 		while (pElements != result.elementsEnd)
 		{
@@ -407,6 +417,10 @@ int main(int argc, char **argv)
 		parse(parser);
 
 		ParseResult parseResult = {};
+
+		parseResult.shaderCount = parser.shaderCount;
+		parseResult.programCount = parser.programCount;
+		parseResult.renderConfigCount = parser.renderConfigCount;
 
 		parseResult.elementsBegin = appState->elements;
 		parseResult.elementsEnd = parser.nextElementBegin;
