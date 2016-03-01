@@ -1,3 +1,5 @@
+#include "StringSlice.h"
+
 struct Version
 {
 	unsigned major, minor;
@@ -52,10 +54,6 @@ struct Parser
 
 	char *nextElementBegin;
 	char *elementsEnd;
-
-	unsigned shaderCount;
-	unsigned programCount;
-	unsigned renderConfigCount;
 
 	ParseError *nextErrorSlot;
 	ParseError *errorsEnd;
@@ -113,10 +111,10 @@ inline static void* reserveElementSlot(Parser& parser, ElementType elementType, 
 	return pElement;
 }
 
-static ShaderDefinition* addShaderDefinition(Parser& parser)
+static ShaderElement* addShaderElement(Parser& parser)
 {
-	auto elementSlot = (ShaderDefinition*) reserveElementSlot(
-		parser, ElementType::ShaderDefinition, sizeof(ShaderDefinition));
+	auto elementSlot = (ShaderElement*) reserveElementSlot(
+		parser, ElementType::Shader, sizeof(ShaderElement));
 	if (elementSlot == nullptr)
 	{
 		return nullptr;
@@ -126,10 +124,10 @@ static ShaderDefinition* addShaderDefinition(Parser& parser)
 	return elementSlot;
 }
 
-static ProgramDefinition* addProgramDefinition(Parser& parser)
+static ProgramElement* addProgramElement(Parser& parser)
 {
-	auto elementSlot = (ProgramDefinition*) reserveElementSlot(
-		parser, ElementType::ProgramDefinition, sizeof(ProgramDefinition));
+	auto elementSlot = (ProgramElement*) reserveElementSlot(
+		parser, ElementType::Program, sizeof(ProgramElement));
 	if (elementSlot == nullptr)
 	{
 		return nullptr;
@@ -151,9 +149,9 @@ static StringSlice* addAttachedShader(Parser& parser)
 	return elementSlot;
 }
 
-static bool addRenderConfig(Parser& parser, RenderConfig const& renderConfig)
+static bool addRenderConfigElement(Parser& parser, RenderConfigElement const& renderConfig)
 {
-	auto elementSlot = (RenderConfig*) reserveElementSlot(
+	auto elementSlot = (RenderConfigElement*) reserveElementSlot(
 		parser, ElementType::RenderConfig, sizeof(renderConfig));
 	if (elementSlot == nullptr)
 	{
@@ -468,9 +466,9 @@ static bool readVersionStatement(Parser& parser)
 	return true;
 }
 
-static bool readRenderConfig(Parser& parser, StringSlice name)
+static bool readRenderConfigElement(Parser& parser, StringSlice name)
 {
-	RenderConfig result = {};
+	RenderConfigElement result = {};
 	result.name = name;
 
 	bool hasProgramBlock = false;
@@ -563,17 +561,16 @@ exitLoop:
 		addParseError(parser, ParseErrorType::RenderConfigMissingCount);
 	}
 
-	if (!addRenderConfig(parser, result))
+	if (!addRenderConfigElement(parser, result))
 	{
 		addParseError(parser, ParseErrorType::ExceededMaxRenderConfigCount);
 		return false;
 	}
 
-	++parser.renderConfigCount;
 	return true;
 }
 
-static bool readShaderDefinition(Parser& parser, StringSlice name, ShaderType type)
+static bool readShaderElement(Parser& parser, StringSlice name, ShaderType type)
 {
 	StringSlice path;
 	if (!readPathBlock(parser, path))
@@ -581,7 +578,7 @@ static bool readShaderDefinition(Parser& parser, StringSlice name, ShaderType ty
 		return false;
 	}
 
-	ShaderDefinition* shader = addShaderDefinition(parser);
+	ShaderElement* shader = addShaderElement(parser);
 	if (shader == nullptr)
 	{
 		addParseError(parser, ParseErrorType::ExceededMaxShaderCount);
@@ -591,7 +588,6 @@ static bool readShaderDefinition(Parser& parser, StringSlice name, ShaderType ty
 	shader->name = name;
 	shader->type = type;
 	shader->path = path;
-	++parser.shaderCount;
 
 	return true;
 }
@@ -629,43 +625,43 @@ void parse(Parser& parser)
 //TODO maybe use a hash map rather than an 'if' cascade
 		if (type == "VertexShader")
 		{
-			if (!readShaderDefinition(parser, identifier, ShaderType::Vertex))
+			if (!readShaderElement(parser, identifier, ShaderType::Vertex))
 			{
 				return;
 			}
 		} else if (type == "TessControlShader")
 		{
-			if (!readShaderDefinition(parser, identifier, ShaderType::TessControl))
+			if (!readShaderElement(parser, identifier, ShaderType::TessControl))
 			{
 				return;
 			}
 		} else if (type == "TessEvalShader")
 		{
-			if (!readShaderDefinition(parser, identifier, ShaderType::TessEval))
+			if (!readShaderElement(parser, identifier, ShaderType::TessEval))
 			{
 				return;
 			}
 		} else if (type == "GeometryShader")
 		{
-			if (!readShaderDefinition(parser, identifier, ShaderType::Geometry))
+			if (!readShaderElement(parser, identifier, ShaderType::Geometry))
 			{
 				return;
 			}
 		} else if (type == "FragmentShader")
 		{
-			if (!readShaderDefinition(parser, identifier, ShaderType::Fragment))
+			if (!readShaderElement(parser, identifier, ShaderType::Fragment))
 			{
 				return;
 			}
 		} else if (type == "ComputeShader")
 		{
-			if (!readShaderDefinition(parser, identifier, ShaderType::Compute))
+			if (!readShaderElement(parser, identifier, ShaderType::Compute))
 			{
 				return;
 			}
 		} else if (type == "Program")
 		{
-			ProgramDefinition* program = addProgramDefinition(parser);
+			ProgramElement* program = addProgramElement(parser);
 			if (program == nullptr)
 			{
 				addParseError(parser, ParseErrorType::ExceededMaxProgramCount);
@@ -673,7 +669,6 @@ void parse(Parser& parser)
 			}
 
 			program->name = identifier;
-			++parser.programCount;
 
 			for (;;)
 			{
@@ -700,7 +695,7 @@ void parse(Parser& parser)
 			}
 		} else if (type == "RenderConfig")
 		{
-			if (!readRenderConfig(parser, identifier))
+			if (!readRenderConfigElement(parser, identifier))
 			{
 				return;
 			}

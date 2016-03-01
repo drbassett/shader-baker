@@ -36,7 +36,7 @@ drawTriangle RenderConfig{
 }
 
 drawTesselatedTriangle RenderConfig{
-	Program{comlexProgram}
+	Program{complexProgram}
 	Primitive{Triangles}
 	Count{3}
 }

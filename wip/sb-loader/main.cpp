@@ -8,31 +8,18 @@
 
 //TODO Clean up skipWhitespace() calls.
 
-//TODO Don't forget, the parser leaves extra single quotes inside paths, so
-//     the path parser needs to advance 2 characters when it encounters a
-//     single quote
-
 #include <cassert>
 #include <cstdlib>
 
+#include "StringSlice.h"
+#include "StringReference.h"
 #include "loader.h"
 #include "parser.h"
-
-#define ArrayLength(a) sizeof(a) / sizeof(a[0])
-
-struct SubString
-{
-	size_t begin, length;
-};
 
 struct ParseResult
 {
 	Version version;
 	
-	unsigned shaderCount;
-	unsigned programCount;
-	unsigned renderConfigCount;
-
 	char *elementsBegin;
 	char *elementsEnd;
 
@@ -40,10 +27,499 @@ struct ParseResult
 	ParseError *errorsEnd;
 };
 
-inline size_t megabytes(size_t n)
+struct Shader
 {
-	return 1024 * 1024 * n;
+	StringReference name;
+	ShaderType type;
+	StringReference path;
+};
+
+struct Program
+{
+	StringReference name;
+	Shader **attachedShadersBegin, **attachedShadersEnd;
+};
+
+enum struct DrawPrimitive
+{
+	Points,
+
+	Lines,
+	LineStrip,
+	LineLoop,
+
+	Triangles,
+	TriangleStrip,
+	TriangleFan,
+};
+
+struct RenderConfig
+{
+	StringReference name;
+	Program *program;
+	DrawPrimitive primitive;
+	unsigned drawCount;
+};
+
+struct Shaders
+{
+	Shader *begin, *end;
+};
+
+struct Programs
+{
+	Program *begin, *end;
+};
+
+struct AttachedShaders
+{
+	Shader **begin, **end;
+};
+
+struct RenderConfigs
+{
+	RenderConfig *begin, *end;
+};
+
+struct ShaderBakerObjects
+{
+	void *memoryBlock;
+
+	char* stringPool;
+	Shaders shaders;
+	Programs programs;
+	AttachedShaders attachedShaders;
+	RenderConfigs renderConfigs;
+};
+
+struct ElementValue
+{
+	ElementType elementType;
+
+	union
+	{
+		ShaderElement *shader;
+
+		struct
+		{
+			ProgramElement *ptr;
+			StringSlice *attachedShadersBegin;
+		} program;
+
+		RenderConfigElement *renderConfig;
+	} element;
+};
+
+struct StringAllocator
+{
+	char* next;
+};
+
+struct ParseResultCounts
+{
+	unsigned shaderCount;
+	unsigned programCount;
+	unsigned renderConfigCount;
+	unsigned attachedShadersCount;
+	unsigned stringCount;
+
+	size_t stringPoolSize;
+};
+
+StringReference copyStringSlice(StringAllocator& allocator, StringSlice string)
+{
+	StringReference result{allocator.next};
+
+	auto pStringLength = (size_t*) allocator.next;
+	*pStringLength = stringSliceLength(string);
+	allocator.next += sizeof(size_t);
+
+	while (string.begin != string.end)
+	{
+		*allocator.next = *string.begin;
+		++string.begin;
+		++allocator.next;
+	}
+
+	return result;
 }
+
+// Paths escape a single quote by including two single quotes in a
+// row. This function copies a string, skipping extra single quotes
+// in the process.
+StringReference copyRawPath(StringAllocator& allocator, StringSlice string)
+{
+	StringReference result{allocator.next};
+
+	auto pStringLength = (size_t*) allocator.next;
+	allocator.next += sizeof(size_t);
+
+	auto stringBegin = allocator.next;
+	while (string.begin != string.end)
+	{
+		*allocator.next = *string.begin;
+		if (*string.begin == '\'')
+		{
+			++string.begin;
+			assert(*string.begin == '\'');
+		}
+		++string.begin;
+		++allocator.next;
+	}
+
+	*pStringLength = allocator.next - stringBegin;
+
+	return result;
+}
+
+static char* readElementValue(char *pElement, ElementValue &result)
+{
+	result = {};
+	auto pElementType = (ElementType*) pElement;
+	result.elementType = *pElementType;
+	auto pElementValue = pElementType + 1;
+	char *next = nullptr;
+	switch (result.elementType)
+	{
+	case ElementType::Shader:
+	{
+		auto pShader = (ShaderElement*) pElementValue;
+		result.element.shader = pShader;
+		next = (char*) (pShader + 1);
+	} break;
+	case ElementType::Program:
+	{
+		auto pProgram = (ProgramElement*) pElementValue;
+		auto attachedShadersBegin = (StringSlice*) (pProgram + 1);
+		result.element.program = {pProgram, attachedShadersBegin};
+		next = (char*) (attachedShadersBegin + pProgram->attachedShaderCount);
+	} break;
+	case ElementType::RenderConfig:
+	{
+		auto pRenderConfig = (RenderConfigElement*) pElementValue;
+		result.element.renderConfig = pRenderConfig;
+		next = (char*) (pRenderConfig + 1);
+	} break;
+	default:
+	{
+		unreachable();
+	} break;
+	}
+
+	return next;
+}
+
+ParseResultCounts countParseResult(ParseResult const& parseResult)
+{
+	ParseResultCounts result = {};
+
+	auto pElements = parseResult.elementsBegin;
+	while (pElements != parseResult.elementsEnd)
+	{
+		ElementValue elementValue;
+		pElements = readElementValue(pElements, elementValue);
+
+		switch (elementValue.elementType)
+		{
+		case ElementType::Shader:
+		{
+			auto pShader = elementValue.element.shader;
+			++result.shaderCount;
+			result.stringCount += 2;
+			result.stringPoolSize += stringSliceLength(pShader->name);
+			result.stringPoolSize += stringSliceLength(pShader->path);
+		} break;
+		case ElementType::Program:
+		{
+			auto pProgram = elementValue.element.program.ptr;
+			auto attachedShadersBegin = elementValue.element.program.attachedShadersBegin;
+			auto attachedShadersEnd = attachedShadersBegin + pProgram->attachedShaderCount;
+			auto attachedShaderCount = (unsigned) (attachedShadersEnd - attachedShadersBegin);
+
+			++result.programCount;
+			result.attachedShadersCount += attachedShaderCount;
+			++result.stringCount;
+			result.stringPoolSize += stringSliceLength(pProgram->name);
+		} break;
+		case ElementType::RenderConfig:
+		{
+			auto pRenderConfig = elementValue.element.renderConfig;
+			++result.renderConfigCount;
+			++result.stringCount;
+			result.stringPoolSize += stringSliceLength(pRenderConfig->name);
+		} break;
+		default:
+			unreachable();
+			break;
+		}
+	}
+
+	return result;
+}
+
+Shader* findShaderWithName(Shader *begin, Shader *end, StringSlice name)
+{
+	while (begin != end)
+	{
+		if (stringReferenceDeref(begin->name) == name)
+		{
+			return begin;
+		}
+		++begin;
+	}
+	return nullptr;
+}
+
+inline Shader* findShaderWithName(Shader *begin, Shader *end, StringReference name)
+{
+	return findShaderWithName(begin, end, stringReferenceDeref(name));
+}
+
+void processShaders(
+	ParseResult const& parseResult,
+	StringAllocator& stringAllocator,
+	Shader *shaderStorage)
+{
+	auto pElements = parseResult.elementsBegin;
+	auto nextShader = shaderStorage;
+	while (pElements != parseResult.elementsEnd)
+	{
+		ElementValue elementValue;
+		pElements = readElementValue(pElements, elementValue);
+
+		switch (elementValue.elementType)
+		{
+		case ElementType::Shader:
+		{
+			auto pShader = elementValue.element.shader;
+
+			auto shaderName = copyStringSlice(stringAllocator, pShader->name);
+			auto shaderPath = copyRawPath(stringAllocator, pShader->path);
+
+			if (findShaderWithName(shaderStorage, nextShader, shaderName) != nullptr)
+			{
+//TODO ERROR duplicate shader name
+			}
+
+			*nextShader = {};
+			nextShader->name = shaderName;
+			nextShader->type = pShader->type;
+			nextShader->path = shaderPath;
+			++nextShader;
+		} break;
+		}
+	}
+}
+
+Program* findProgramWithName(Program *begin, Program *end, StringSlice name)
+{
+	while (begin != end)
+	{
+		if (stringReferenceDeref(begin->name) == name)
+		{
+			return begin;
+		}
+		++begin;
+	}
+	return nullptr;
+}
+
+inline Program* findProgramWithName(Program *begin, Program *end, StringReference name)
+{
+	return findProgramWithName(begin, end, stringReferenceDeref(name));
+}
+
+void processPrograms(
+	ParseResult const& parseResult,
+	StringAllocator& stringAllocator,
+	Shaders shaders,
+	Program *programStorage,
+	Shader **attachedShaderStorage)
+{
+	auto pElements = parseResult.elementsBegin;
+	auto nextProgram = programStorage;
+	auto nextAttachedShader = attachedShaderStorage;
+	while (pElements != parseResult.elementsEnd)
+	{
+		ElementValue elementValue;
+		pElements = readElementValue(pElements, elementValue);
+
+		switch (elementValue.elementType)
+		{
+		case ElementType::Program:
+		{
+			auto pProgram = elementValue.element.program.ptr;
+			auto attachedShaderNamesBegin = elementValue.element.program.attachedShadersBegin;
+			auto attachedShadersEnd = attachedShaderNamesBegin + pProgram->attachedShaderCount;
+
+			auto programName = copyStringSlice(stringAllocator, pProgram->name);
+			if (findProgramWithName(programStorage, nextProgram, programName) != nullptr)
+			{
+//TODO ERROR duplicate shader name
+			}
+
+			auto attachedShadersBegin = nextAttachedShader;
+			while (attachedShaderNamesBegin != attachedShadersEnd)
+			{
+				auto attachedShader = findShaderWithName(shaders.begin, shaders.end, *attachedShaderNamesBegin);
+				if (attachedShader == nullptr)
+				{
+//TODO ERROR could not find shader with name
+				} else
+				{
+					*nextAttachedShader = attachedShader;
+				}
+
+				++attachedShaderNamesBegin;
+				++nextAttachedShader;
+			}
+
+//TODO Check that only one of each shader type (vertex, fragment, etc) is attached
+
+			*nextProgram = {};
+			nextProgram->name = programName;
+			nextProgram->attachedShadersBegin = attachedShadersBegin;
+			nextProgram->attachedShadersEnd = nextAttachedShader;
+			++nextProgram;
+		} break;
+		}
+	}
+}
+
+RenderConfig* findRenderConfigWithName(
+	RenderConfig *begin, RenderConfig *end, StringReference name)
+{
+	while (begin != end)
+	{
+		if (begin->name == name)
+		{
+			return begin;
+		}
+		++begin;
+	}
+	return nullptr;
+}
+
+bool stringToDrawPrimitive(StringSlice string, DrawPrimitive& result)
+{
+	if (string == "Points")
+	{
+		result = DrawPrimitive::Points;
+	} else if (string == "Lines")
+	{
+		result = DrawPrimitive::Lines;
+	} else if (string == "LineStrip")
+	{
+		result = DrawPrimitive::LineStrip;
+	} else if (string == "LineLoop")
+	{
+		result = DrawPrimitive::LineLoop;
+	} else if (string == "Triangles")
+	{
+		result = DrawPrimitive::Triangles;
+	} else if (string == "TriangleStrip")
+	{
+		result = DrawPrimitive::TriangleStrip;
+	} else if (string == "TriangleFan")
+	{
+		result = DrawPrimitive::TriangleFan;
+	} else
+	{
+		return false;
+	}
+
+	return true;
+}
+
+void processRenderConfigs(
+	ParseResult const& parseResult,
+	StringAllocator& stringAllocator,
+	Programs programs,
+	RenderConfig *renderConfigStorage)
+{
+	auto pElements = parseResult.elementsBegin;
+	auto nextRenderConfig = renderConfigStorage;
+	while (pElements != parseResult.elementsEnd)
+	{
+		ElementValue elementValue;
+		pElements = readElementValue(pElements, elementValue);
+
+		switch (elementValue.elementType)
+		{
+		case ElementType::RenderConfig:
+		{
+			auto pRenderConfig = elementValue.element.renderConfig;
+
+			auto renderConfigName = copyStringSlice(stringAllocator, pRenderConfig->name);
+			if (findRenderConfigWithName(renderConfigStorage, nextRenderConfig, renderConfigName) != nullptr)
+			{
+//TODO ERROR duplicate render config name
+			}
+
+//TODO move the string-to-primitive conversion to the parser
+			DrawPrimitive drawPrimitive;
+			if (!stringToDrawPrimitive(pRenderConfig->primitive, drawPrimitive))
+			{
+//TODO ERROR unknown draw primitive type
+			}
+
+			auto program = findProgramWithName(programs.begin, programs.end, pRenderConfig->programName);
+			if (program == nullptr)
+			{
+//TODO ERROR could not find program with name
+			}
+
+			*nextRenderConfig = {};
+			nextRenderConfig->name = renderConfigName;
+			nextRenderConfig->program = program;
+			nextRenderConfig->primitive = drawPrimitive;
+			nextRenderConfig->drawCount = pRenderConfig->drawCount;
+			++nextRenderConfig;
+		} break;
+		}
+	}
+}
+
+ShaderBakerObjects processParseResult(ParseResult const& parseResult)
+{
+	auto counts = countParseResult(parseResult);
+
+	auto stringPoolSize = counts.stringCount * sizeof(size_t) + counts.stringPoolSize;
+	auto memoryBlockSize =
+		+ counts.shaderCount * sizeof(Shader)
+		+ counts.programCount * sizeof(Program)
+		+ counts.attachedShadersCount * sizeof(Shader*)
+		+ counts.renderConfigCount * sizeof(RenderConfig)
+		+ stringPoolSize;
+	auto memoryBlock = malloc(memoryBlockSize);
+
+	auto shaderStorage = (Shader*) memoryBlock;
+	auto programStorage = (Program*) (shaderStorage + counts.shaderCount);
+	auto attachedShaderStorage = (Shader**) (programStorage + counts.programCount);
+	auto renderConfigStorage = (RenderConfig*) (attachedShaderStorage + counts.attachedShadersCount);
+	auto stringPoolBegin = (char*) (renderConfigStorage + counts.renderConfigCount);
+
+	ShaderBakerObjects result = {};
+	result.memoryBlock = memoryBlock;
+	result.stringPool = stringPoolBegin;
+	result.shaders = {shaderStorage, shaderStorage + counts.shaderCount};
+	result.programs = {programStorage, programStorage + counts.programCount};
+	result.attachedShaders = {attachedShaderStorage, attachedShaderStorage + counts.attachedShadersCount};
+	result.renderConfigs = {renderConfigStorage, renderConfigStorage + counts.renderConfigCount};
+
+	StringAllocator stringAllocator{stringPoolBegin};
+	processShaders(parseResult, stringAllocator, shaderStorage);
+	processPrograms(parseResult, stringAllocator, result.shaders, programStorage, attachedShaderStorage);
+	processRenderConfigs(parseResult, stringAllocator, result.programs, renderConfigStorage);
+
+	return result;
+}
+
+#include <cstdio>
+#include <cstdlib>
+
+#define ArrayEnd(a) (a) + sizeof(a) / sizeof(a[0])
+#define ArrayLength(a) sizeof(a) / sizeof(a[0])
 
 struct MemoryArena
 {
@@ -118,11 +594,10 @@ size_t memoryArenaIndex(MemoryArena& arena)
 	return arena.next - arena.begin;
 }
 
-
-
-#include <cstdio>
-
-#define ArrayEnd(a) (a) + sizeof(a) / sizeof(a[0])
+struct IndexedString
+{
+	size_t begin, length;
+};
 
 struct ApplicationState
 {
@@ -133,6 +608,11 @@ struct ApplicationState
 	// 64 errors should be plenty for a person to deal with at once
 	ParseError parseErrors[64];
 };
+
+inline size_t megabytes(size_t n)
+{
+	return 1024 * 1024 * n;
+}
 
 char* parseErrorTypeToStr(ParseErrorType errorType)
 {
@@ -210,7 +690,22 @@ void printParseErrors(ParseError* begin, ParseError* end)
 	}
 }
 
-char* shaderTypeToStr(ShaderType type)
+void printStringSlice(StringSlice str)
+{
+	char *c = str.begin;
+	while (c != str.end)
+	{
+		putchar(*c);
+		++c;
+	}
+}
+
+void printStringReference(StringReference str)
+{
+	printStringSlice(stringReferenceDeref(str));
+}
+
+const char* shaderTypeToStr(ShaderType type)
 {
 	switch (type)
 	{
@@ -232,101 +727,96 @@ char* shaderTypeToStr(ShaderType type)
 	}
 }
 
-void printStringSlice(StringSlice str)
-{
-	char *c = str.begin;
-	while (c != str.end)
-	{
-		putchar(*c);
-		++c;
-	}
-}
-
-void printShaderDefinition(ShaderDefinition const& shader)
+void printShader(Shader const& shader)
 {
 	printf("%sShader ", shaderTypeToStr(shader.type));
-	printStringSlice(shader.name);
+	printStringReference(shader.name);
 	fputs(": path = \"", stdout);
-	printStringSlice(shader.path);
+	printStringReference(shader.path);
 	fputs("\"\n", stdout);
 }
 
-char* printProgramDefinition(char *pProgram)
+void printProgram(Program const& program)
 {
-	auto program = *((ProgramDefinition*) pProgram);
-	auto attachedShader = (StringSlice*) (pProgram + sizeof(ProgramDefinition));
-	auto attachedShadersEnd = attachedShader + program.attachedShaderCount;
-
 	fputs("Program ", stdout);
-	printStringSlice(program.name);
+	printStringReference(program.name);
 	fputs(": ", stdout);
-	while (attachedShader != attachedShadersEnd)
+	auto nextAttachedShader = program.attachedShadersBegin;
+	while (nextAttachedShader != program.attachedShadersEnd)
 	{
-		printStringSlice(*attachedShader);
+		printStringReference((*nextAttachedShader)->name);
 		fputs(", ", stdout);
-		++attachedShader;
+		++nextAttachedShader;
 	}
 	putchar('\n');
-	return (char*) attachedShader;
 }
 
-void printRenderConfig(RenderConfig const& config)
+const char* drawPrimitiveToString(DrawPrimitive primitive)
+{
+	switch (primitive)
+	{
+	case DrawPrimitive::Points: return "Points";
+	case DrawPrimitive::Lines: return "Lines";
+	case DrawPrimitive::LineStrip: return "LineStrip";
+	case DrawPrimitive::LineLoop: return "LineLoop";
+	case DrawPrimitive::Triangles: return "Triangles";
+	case DrawPrimitive::TriangleStrip: return "TriangleStrip";
+	case DrawPrimitive::TriangleFan: return "TriangleFan";
+	}
+	
+	unreachable();
+	return "";
+}
+
+void printRenderConfig(RenderConfig const& renderConfig)
 {
 	fputs("RenderConfig ", stdout);
-	printStringSlice(config.name);
-	printf(": renders count=%d ", config.drawCount);
-	printStringSlice(config.primitive);
-	fputs(" with program '", stdout);
-	printStringSlice(config.programName);
+	printStringReference(renderConfig.name);
+	printf(
+		": renders count=%d %s with program '",
+		renderConfig.drawCount,
+		drawPrimitiveToString(renderConfig.primitive));
+	printStringReference(renderConfig.program->name);
 	fputs("'\n", stdout);
 }
 
-void printParseResult(ParseResult& result)
+void printShaderBakerObjects(ShaderBakerObjects const& objects)
 {
-	bool hasErrors = result.errorsBegin != result.errorsEnd;
-	if (hasErrors)
+	puts("\nSHADERS:");
 	{
-		printParseErrors(result.errorsBegin, result.errorsEnd);
-	} else
-	{
-		printf("Parse Successful\n\n");
-		auto version = result.version;
-		printf("Version %d.%d\n", version.major, version.minor);
-
-		printf(
-			"Found %d shaders, %d programs, %d rendering configurations\n\n",
-			result.shaderCount,
-			result.programCount,
-			result.renderConfigCount);
-
-		auto pElements = result.elementsBegin;
-		while (pElements != result.elementsEnd)
+		auto *nextShader = objects.shaders.begin;
+		auto *shadersEnd = objects.shaders.end;
+		while (nextShader != shadersEnd)
 		{
-			auto elementType = *((ElementType*) pElements);
-			auto pElement = pElements + sizeof(elementType);
-			pElements += sizeof(elementType);
-			switch (elementType)
-			{
-			case ElementType::ShaderDefinition:
-				printShaderDefinition(*((ShaderDefinition*) pElement));
-				pElements += sizeof(ShaderDefinition);
-				break;
-			case ElementType::ProgramDefinition:
-				pElements = printProgramDefinition(pElement);
-				break;
-			case ElementType::RenderConfig:
-				printRenderConfig(*((RenderConfig*) pElement));
-				pElements += sizeof(RenderConfig);
-				break;
-			default:
-				unreachable();
-				break;
-			}
+			printShader(*nextShader);
+			++nextShader;
+		}
+	}
+
+	puts("\nPROGRAMS:");
+	{
+		auto *nextProgram = objects.programs.begin;
+		auto *programsEnd = objects.programs.end;
+		while (nextProgram != programsEnd)
+		{
+			printProgram(*nextProgram);
+			++nextProgram;
+		}
+	}
+
+	puts("\nRENDERING CONFIGURATIONS:");
+	{
+		auto *nextRenderConfig = objects.renderConfigs.begin;
+		auto *renderConfigsEnd = objects.renderConfigs.end;
+		while (nextRenderConfig != renderConfigsEnd)
+		{
+			printRenderConfig(*nextRenderConfig);
+			++nextRenderConfig;
 		}
 	}
 }
 
-static bool readProjectFile(MemoryArena& arena, char *fileName, SubString& result)
+static bool readProjectFile(MemoryArena& arena, char *fileName, IndexedString& result)
 {
 	auto file = fopen(fileName, "rb");
 	if (!file)
@@ -359,13 +849,13 @@ static bool readProjectFile(MemoryArena& arena, char *fileName, SubString& resul
 		readFileError = !feof(file);
 		if (readFileError)
 		{
-			puts("Failed to read the entire project file\n");
+			puts("Failed to read the entire project file");
 		}
 	}
 
 	if (fclose(file) != 0)
 	{
-		puts("WARNING: ");
+		fputs("WARNING: ", stdout);
 		perror("failed to close project file\n");
 	}
 
@@ -400,7 +890,7 @@ int main(int argc, char **argv)
 	memoryArenaInit(appState->transientArena, megabytes(1), megabytes(1));
 
 	int result = 0;
-	SubString projectFileContents;
+	IndexedString projectFileContents;
 	if (!readProjectFile(appState->transientArena, projectFileName, projectFileContents))
 	{
 		result = 1;
@@ -418,9 +908,7 @@ int main(int argc, char **argv)
 
 		ParseResult parseResult = {};
 
-		parseResult.shaderCount = parser.shaderCount;
-		parseResult.programCount = parser.programCount;
-		parseResult.renderConfigCount = parser.renderConfigCount;
+		parseResult.version = parser.version;
 
 		parseResult.elementsBegin = appState->elements;
 		parseResult.elementsEnd = parser.nextElementBegin;
@@ -428,7 +916,20 @@ int main(int argc, char **argv)
 		parseResult.errorsBegin = appState->parseErrors;
 		parseResult.errorsEnd = parser.nextErrorSlot;
 
-		printParseResult(parseResult);
+		bool hasErrors = parseResult.errorsBegin != parseResult.errorsEnd;
+		if (hasErrors)
+		{
+			printParseErrors(parseResult.errorsBegin, parseResult.errorsEnd);
+		} else
+		{
+			puts("Load successful\n");
+
+			printf("Version %d.%d\n", parseResult.version.major, parseResult.version.minor);
+
+			auto objects = processParseResult(parseResult);
+			printShaderBakerObjects(objects);
+			free(objects.memoryBlock);
+		}
 	}
 
 cleanup:
