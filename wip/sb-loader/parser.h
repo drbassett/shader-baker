@@ -28,6 +28,7 @@ enum struct ParseErrorType
 	RenderConfigMissingProgram,
 	RenderConfigMultiplePrograms,
 	RenderConfigMissingPrimitive,
+	UnknownDrawPrimitive,
 	RenderConfigMultiplePrimitives,
 	RenderConfigMissingCount,
 	RenderConfigMultipleCounts,
@@ -466,6 +467,37 @@ static bool readVersionStatement(Parser& parser)
 	return true;
 }
 
+bool stringToDrawPrimitive(StringSlice string, DrawPrimitive& result)
+{
+	if (string == "Points")
+	{
+		result = DrawPrimitive::Points;
+	} else if (string == "Lines")
+	{
+		result = DrawPrimitive::Lines;
+	} else if (string == "LineStrip")
+	{
+		result = DrawPrimitive::LineStrip;
+	} else if (string == "LineLoop")
+	{
+		result = DrawPrimitive::LineLoop;
+	} else if (string == "Triangles")
+	{
+		result = DrawPrimitive::Triangles;
+	} else if (string == "TriangleStrip")
+	{
+		result = DrawPrimitive::TriangleStrip;
+	} else if (string == "TriangleFan")
+	{
+		result = DrawPrimitive::TriangleFan;
+	} else
+	{
+		return false;
+	}
+
+	return true;
+}
+
 static bool readRenderConfigElement(Parser& parser, StringSlice name)
 {
 	RenderConfigElement result = {};
@@ -519,9 +551,15 @@ static bool readRenderConfigElement(Parser& parser, StringSlice name)
 			}
 			hasPrimitiveBlock = true;
 
-			if (!readSingletonBlock(parser, result.primitive))
+			StringSlice primitiveName;
+			if (!readSingletonBlock(parser, primitiveName))
 			{
 				return false;
+			}
+
+			if (!stringToDrawPrimitive(primitiveName, result.primitive))
+			{
+				addParseError(parser, ParseErrorType::UnknownDrawPrimitive);
 			}
 		} else if (type == "Count")
 		{
@@ -536,6 +574,7 @@ static bool readRenderConfigElement(Parser& parser, StringSlice name)
 				addParseError(parser, ParseErrorType::RenderConfigEmptyOrInvalidCount);
 				return false;
 			}
+
 			if (!endBlock(parser))
 			{
 				return false;

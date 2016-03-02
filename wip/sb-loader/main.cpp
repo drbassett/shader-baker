@@ -40,19 +40,6 @@ struct Program
 	Shader **attachedShadersBegin, **attachedShadersEnd;
 };
 
-enum struct DrawPrimitive
-{
-	Points,
-
-	Lines,
-	LineStrip,
-	LineLoop,
-
-	Triangles,
-	TriangleStrip,
-	TriangleFan,
-};
-
 struct RenderConfig
 {
 	StringReference name;
@@ -400,37 +387,6 @@ RenderConfig* findRenderConfigWithName(
 	return nullptr;
 }
 
-bool stringToDrawPrimitive(StringSlice string, DrawPrimitive& result)
-{
-	if (string == "Points")
-	{
-		result = DrawPrimitive::Points;
-	} else if (string == "Lines")
-	{
-		result = DrawPrimitive::Lines;
-	} else if (string == "LineStrip")
-	{
-		result = DrawPrimitive::LineStrip;
-	} else if (string == "LineLoop")
-	{
-		result = DrawPrimitive::LineLoop;
-	} else if (string == "Triangles")
-	{
-		result = DrawPrimitive::Triangles;
-	} else if (string == "TriangleStrip")
-	{
-		result = DrawPrimitive::TriangleStrip;
-	} else if (string == "TriangleFan")
-	{
-		result = DrawPrimitive::TriangleFan;
-	} else
-	{
-		return false;
-	}
-
-	return true;
-}
-
 void processRenderConfigs(
 	ParseResult const& parseResult,
 	StringAllocator& stringAllocator,
@@ -456,12 +412,6 @@ void processRenderConfigs(
 //TODO ERROR duplicate render config name
 			}
 
-//TODO move the string-to-primitive conversion to the parser
-			DrawPrimitive drawPrimitive;
-			if (!stringToDrawPrimitive(pRenderConfig->primitive, drawPrimitive))
-			{
-//TODO ERROR unknown draw primitive type
-			}
 
 			auto program = findProgramWithName(programs.begin, programs.end, pRenderConfig->programName);
 			if (program == nullptr)
@@ -472,7 +422,7 @@ void processRenderConfigs(
 			*nextRenderConfig = {};
 			nextRenderConfig->name = renderConfigName;
 			nextRenderConfig->program = program;
-			nextRenderConfig->primitive = drawPrimitive;
+			nextRenderConfig->primitive = pRenderConfig->primitive;
 			nextRenderConfig->drawCount = pRenderConfig->drawCount;
 			++nextRenderConfig;
 		} break;
@@ -650,6 +600,8 @@ char* parseErrorTypeToStr(ParseErrorType errorType)
 		return "Multiple Program blocks declared in a RenderConfig block";
 	case ParseErrorType::RenderConfigMissingPrimitive:
 		return "Missing Primitive block in a RenderConfig block";
+	case ParseErrorType::UnknownDrawPrimitive:
+		return "Unknown draw primitive type in a Primitive block";
 	case ParseErrorType::RenderConfigMultiplePrimitives:
 		return "Multiple Primitive blocks declared in a RenderConfig block";
 	case ParseErrorType::RenderConfigMissingCount:

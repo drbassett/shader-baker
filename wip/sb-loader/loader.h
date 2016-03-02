@@ -17,6 +17,19 @@ enum struct ShaderType
 	Compute,
 };
 
+enum struct DrawPrimitive
+{
+	Points,
+
+	Lines,
+	LineStrip,
+	LineLoop,
+
+	Triangles,
+	TriangleStrip,
+	TriangleFan,
+};
+
 struct ShaderElement
 {
 	StringSlice name;
@@ -34,7 +47,7 @@ struct RenderConfigElement
 {
 	StringSlice name;
 	StringSlice programName;
-	StringSlice primitive;
+	DrawPrimitive primitive;
 	unsigned drawCount;
 };
 
