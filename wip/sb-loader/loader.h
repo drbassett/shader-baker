@@ -92,6 +92,11 @@ enum struct LoaderErrorType
 	RenderConfigMultipleCounts,
 	RenderConfigEmptyProgramName,
 	RenderConfigEmptyOrInvalidCount,
+	DuplicateShaderName,
+	DuplicateProgramName,
+	ProgramUnresolvedAttachedShaderName,
+	DuplicateRenderConfigName,
+	RenderConfigUnresolvedProgramName,
 };
 
 struct LoaderError

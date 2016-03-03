@@ -261,6 +261,7 @@ inline Shader* findShaderWithName(Shader *begin, Shader *end, StringReference na
 
 void processShaders(
 	ParseElements const& elements,
+	LoaderErrorCollector& errorCollector,
 	StringAllocator& stringAllocator,
 	Shader *shaderStorage)
 {
@@ -282,7 +283,9 @@ void processShaders(
 
 			if (findShaderWithName(shaderStorage, nextShader, shaderName) != nullptr)
 			{
-//TODO ERROR duplicate shader name
+				addLoaderError(
+					errorCollector,
+					LoaderError{LoaderErrorType::DuplicateShaderName, pShader->nameToken.location});
 			}
 
 			*nextShader = {};
@@ -315,6 +318,7 @@ inline Program* findProgramWithName(Program *begin, Program *end, StringReferenc
 
 void processPrograms(
 	ParseElements const& elements,
+	LoaderErrorCollector& errorCollector,
 	StringAllocator& stringAllocator,
 	Shaders shaders,
 	Program *programStorage,
@@ -339,7 +343,9 @@ void processPrograms(
 			auto programName = copyStringSlice(stringAllocator, pProgram->nameToken.value);
 			if (findProgramWithName(programStorage, nextProgram, programName) != nullptr)
 			{
-//TODO ERROR duplicate shader name
+				addLoaderError(
+					errorCollector,
+					LoaderError{LoaderErrorType::DuplicateProgramName, pProgram->nameToken.location});
 			}
 
 			auto attachedShadersBegin = nextAttachedShader;
@@ -349,7 +355,12 @@ void processPrograms(
 					shaders.begin, shaders.end, attachedShaderNameTokensBegin->value);
 				if (attachedShader == nullptr)
 				{
-//TODO ERROR could not find shader with name
+					addLoaderError(
+						errorCollector,
+						LoaderError{
+							LoaderErrorType::ProgramUnresolvedAttachedShaderName,
+							attachedShaderNameTokensBegin->location});
+					*nextAttachedShader = nullptr;
 				} else
 				{
 					*nextAttachedShader = attachedShader;
@@ -387,6 +398,7 @@ RenderConfig* findRenderConfigWithName(
 
 void processRenderConfigs(
 	ParseElements const& elements,
+	LoaderErrorCollector& errorCollector,
 	StringAllocator& stringAllocator,
 	Programs programs,
 	RenderConfig *renderConfigStorage)
@@ -407,7 +419,11 @@ void processRenderConfigs(
 			auto renderConfigName = copyStringSlice(stringAllocator, pRenderConfig->nameToken.value);
 			if (findRenderConfigWithName(renderConfigStorage, nextRenderConfig, renderConfigName) != nullptr)
 			{
-//TODO ERROR duplicate render config name
+				addLoaderError(
+					errorCollector,
+					LoaderError{
+						LoaderErrorType::DuplicateRenderConfigName,
+						pRenderConfig->nameToken.location});
 			}
 
 
@@ -415,7 +431,11 @@ void processRenderConfigs(
 				programs.begin, programs.end, pRenderConfig->programNameToken.value);
 			if (program == nullptr)
 			{
-//TODO ERROR could not find program with name
+				addLoaderError(
+					errorCollector,
+					LoaderError{
+						LoaderErrorType::RenderConfigUnresolvedProgramName,
+						pRenderConfig->programNameToken.location});
 			}
 
 			*nextRenderConfig = {};
@@ -429,7 +449,8 @@ void processRenderConfigs(
 	}
 }
 
-ShaderBakerObjects processParseElements(ParseElements const& elements, LoaderErrorCollector& errorCollector)
+ShaderBakerObjects processParseElements(
+	ParseElements const& elements, LoaderErrorCollector& errorCollector)
 {
 	auto counts = countParseElements(elements);
 
@@ -457,9 +478,15 @@ ShaderBakerObjects processParseElements(ParseElements const& elements, LoaderErr
 	result.renderConfigs = {renderConfigStorage, renderConfigStorage + counts.renderConfigCount};
 
 	StringAllocator stringAllocator{stringPoolBegin};
-	processShaders(elements, stringAllocator, shaderStorage);
-	processPrograms(elements, stringAllocator, result.shaders, programStorage, attachedShaderStorage);
-	processRenderConfigs(elements, stringAllocator, result.programs, renderConfigStorage);
+	processShaders(elements, errorCollector, stringAllocator, shaderStorage);
+	processPrograms(
+		elements,
+		errorCollector,
+		stringAllocator,
+		result.shaders,
+		programStorage,
+		attachedShaderStorage);
+	processRenderConfigs(elements, errorCollector, stringAllocator, result.programs, renderConfigStorage);
 
 	return result;
 }
@@ -563,7 +590,7 @@ inline size_t megabytes(size_t n)
 	return 1024 * 1024 * n;
 }
 
-char* parseErrorTypeToStr(LoaderErrorType errorType)
+char* loaderErrorTypeToString(LoaderErrorType errorType)
 {
 	switch (errorType)
 	{
@@ -621,6 +648,16 @@ char* parseErrorTypeToStr(LoaderErrorType errorType)
 		return "Too many attached shaders!";
 	case LoaderErrorType::ExceededMaxRenderConfigCount:
 		return "Too many rendering configurations!";
+	case LoaderErrorType::DuplicateShaderName:
+		return "Another shader already has this name";
+	case LoaderErrorType::DuplicateProgramName:
+		return "Another program already has this name";
+	case LoaderErrorType::ProgramUnresolvedAttachedShaderName:
+		return "No shader has this name";
+	case LoaderErrorType::DuplicateRenderConfigName:
+		return "Another rendering configuration already has this name";
+	case LoaderErrorType::RenderConfigUnresolvedProgramName:
+		return "No program has this name";
 	default:
 		unreachable();
 		return "";
@@ -636,7 +673,7 @@ void printLoaderErrors(LoaderError* begin, LoaderError* end)
 			(unsigned) begin->type,
 			begin->location.lineNumber,
 			begin->location.charNumber,
-			parseErrorTypeToStr(begin->type));
+			loaderErrorTypeToString(begin->type));
 		++begin;
 	}
 }
@@ -868,8 +905,6 @@ int main(int argc, char **argv)
 			printLoaderErrors(errorsBegin, parserErrorsEnd);
 		} else
 		{
-			puts("Parsing succeeded\n");
-
 			LoaderErrorCollector errorCollector{errorsBegin, ArrayEnd(appState->loaderErrors)};
 			auto objects = processParseElements(
 				ParseElements{appState->elements, parser.nextElementBegin}, errorCollector);
