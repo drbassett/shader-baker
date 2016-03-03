@@ -19,100 +19,25 @@
 
 #include <cstdio>
 
-#define ArrayEnd(a) (a) + sizeof(a) / sizeof(a[0])
 #define ArrayLength(a) sizeof(a) / sizeof(a[0])
-
-struct MemoryArena
-{
-	char *begin, *end;
-	char *next;
-	size_t growSize;
-};
-
-bool memoryArenaInit(MemoryArena& arena, size_t initialSize, size_t growSize)
-{
-	auto memory = (char*) malloc(initialSize);
-	if (!memory)
-	{
-		return false;
-	}
-
-	arena.begin = memory;
-	arena.end = memory + initialSize;
-	arena.next = memory;
-	arena.growSize = growSize;
-	return true;
-}
-
-void memoryArenaDestroy(MemoryArena& arena)
-{
-	free(arena.begin);
-}
-
-void memoryArenaReallocate(MemoryArena& arena)
-{
-//TODO check for overflow in calculation of newSize
-	auto newSize = arena.end - arena.begin + arena.growSize;
-	auto memory = (char*) realloc(arena.begin, newSize);
-	if (!memory)
-	{
-//TODO out-of-memory. How should this case be handled? Crash the program?
-		memoryArenaDestroy(arena);
-		assert(false);
-	}
-
-	arena.next = arena.next - arena.begin + memory;
-	arena.begin = memory;
-	arena.end = memory + newSize;
-}
-
-void* memoryArenaAllocate(MemoryArena& arena, size_t size)
-{
-//TODO check for overflow in calculation of requiredSize
-	size_t requiredSize = arena.next - arena.begin + size;
-
-	// Use a while loop in case the allocation is very large. This case should rarely,
-	// if ever - the arena's reallocation size should be tuned to prevent this.
-	while ((size_t) (arena.end - arena.begin) < requiredSize)
-	{
-		memoryArenaReallocate(arena);
-	}
-
-	auto result = arena.next;
-	arena.next += size;
-
-	return result;
-}
-
-void memoryArenaFree(MemoryArena& arena, size_t size)
-{
-	assert((size_t) arena.next - (size_t) arena.begin >= size);
-	arena.next -= size;
-}
-
-size_t memoryArenaIndex(MemoryArena& arena)
-{
-	return arena.next - arena.begin;
-}
-
-struct IndexedString
-{
-	size_t begin, length;
-};
+#define ArrayEnd(a) (a) + sizeof(a) / sizeof(a[0])
 
 struct ApplicationState
 {
-	MemoryArena transientArena;
-
 	char elements[1024 * 1024 * 1];
 
 	// 64 errors should be plenty for a person to deal with at once
 	LoaderError loaderErrors[64];
 };
 
+inline size_t kilobytes(size_t n)
+{
+	return 1024 * n;
+}
+
 inline size_t megabytes(size_t n)
 {
-	return 1024 * 1024 * n;
+	return 1024 * kilobytes(n);
 }
 
 char* loaderErrorTypeToString(LoaderErrorType errorType)
@@ -323,50 +248,76 @@ void printShaderBakerObjects(ShaderBakerObjects const& objects)
 	}
 }
 
-static bool readProjectFile(MemoryArena& arena, char *fileName, IndexedString& result)
+static bool readProjectFile(char *fileName, char*& fileContents, size_t& fileSize)
 {
+	// 128 KB should be more than enough space to read in the project
+	// file, for the foreseeable future. If not, the loop below is robust
+	// enough to allocate more space.
+	auto blockSize = kilobytes(128);
+	fileContents = (char*) malloc(blockSize);
+	if (fileContents == nullptr)
+	{
+		puts("ERROR: unable to allocate enough memory to read project file");
+		return false;
+	}
+
 	auto file = fopen(fileName, "rb");
 	if (!file)
 	{
 		perror("Failed to open project file\n");
 		return false;
 	}
-
-	result.begin = memoryArenaIndex(arena);
-	size_t blockSize = 4096;
+	
+	fileSize = 0;
+	bool result = true;
 	for (;;)
 	{
-		auto readAddress = memoryArenaAllocate(arena, blockSize);
+		auto readAddress = fileContents + fileSize;
 		auto readSize = fread(readAddress, sizeof(char), blockSize, file);
+		fileSize += blockSize;
 		if (readSize < blockSize)
 		{
 			auto extraBytes = blockSize - readSize;
-			memoryArenaFree(arena, extraBytes);
+			fileSize -= extraBytes;
 			break;
 		}
-	}
-	result.length = memoryArenaIndex(arena) - result.begin;
 
-	auto readFileError = ferror(file);
-	if (readFileError)
+		auto newMemory = (char*) realloc(fileContents, fileSize + blockSize);
+		if (newMemory == nullptr)
+		{
+			free(fileContents);
+			fileContents = nullptr;
+			fileSize = 0;
+			result = false;
+			puts("ERROR: unable to allocate enough memory to read project file");
+			goto closeFile;
+		}
+
+		fileContents = newMemory;
+	}
+
+	if (ferror(file))
 	{
 		perror("Unable to read project file\n");
-	} else 
-	{
-		readFileError = !feof(file);
-		if (readFileError)
-		{
-			puts("Failed to read the entire project file");
-		}
+		result = false;
+		goto closeFile;
 	}
 
+	if (!feof(file))
+	{
+		puts("Failed to read the entire project file");
+		result = false;
+		goto closeFile;
+	}
+
+closeFile:
 	if (fclose(file) != 0)
 	{
 		fputs("WARNING: ", stdout);
 		perror("failed to close project file\n");
 	}
 
-	return readFileError == 0;
+	return result;
 }
 
 void initParser(ApplicationState& appState, Parser& parser, StringSlice input)
@@ -394,22 +345,17 @@ int main(int argc, char **argv)
 	auto projectFileName = argv[1];
 
 	auto appState = (ApplicationState*) malloc(sizeof(ApplicationState));
-	memoryArenaInit(appState->transientArena, megabytes(1), megabytes(1));
 
 	int result = 0;
-	IndexedString projectFileContents;
-	if (!readProjectFile(appState->transientArena, projectFileName, projectFileContents))
+	char* projectFileContents;
+	size_t projectFileLength;
+	if (!readProjectFile(projectFileName, projectFileContents, projectFileLength))
 	{
 		result = 1;
-		goto cleanup;
-	}
-
+	} else
 	{
-		StringSlice input = {};
-		input.begin = appState->transientArena.begin + projectFileContents.begin;
-		input.end = input.begin + projectFileContents.length;
-
 		Parser parser = {};
+		StringSlice input{projectFileContents, projectFileContents + projectFileLength};
 		initParser(*appState, parser, input);
 		parse(parser);
 
@@ -422,6 +368,7 @@ int main(int argc, char **argv)
 		{
 			puts("Parsing failed\n");
 			printLoaderErrors(errorsBegin, parserErrorsEnd);
+			result = 1;
 		} else
 		{
 			LoaderErrorCollector errorCollector{errorsBegin, ArrayEnd(appState->loaderErrors)};
@@ -433,6 +380,7 @@ int main(int argc, char **argv)
 			{
 				puts("Loading failed\n");
 				printLoaderErrors(errorsBegin, loaderErrorsEnd);
+				result = 1;
 			} else
 			{
 				printf("Version %d.%d\n", version.major, version.minor);
@@ -441,10 +389,10 @@ int main(int argc, char **argv)
 
 			free(objects.memoryBlock);
 		}
+
+		free(projectFileContents);
 	}
 
-cleanup:
-	memoryArenaDestroy(appState->transientArena);
 	free(appState);
 	return result;
 }
