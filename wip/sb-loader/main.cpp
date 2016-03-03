@@ -19,17 +19,6 @@
 #include "loader.h"
 #include "parser.h"
 
-struct ParseResult
-{
-	Version version;
-	
-	char *elementsBegin;
-	char *elementsEnd;
-
-	LoaderError *errorsBegin;
-	LoaderError *errorsEnd;
-};
-
 struct Shader
 {
 	StringReference name;
@@ -105,12 +94,17 @@ struct StringAllocator
 	char* next;
 };
 
-struct ParseResultCounts
+struct ParseElements
+{
+	char *begin, *end;
+};
+
+struct ParseElementCounts
 {
 	unsigned shaderCount;
 	unsigned programCount;
 	unsigned renderConfigCount;
-	unsigned attachedShadersCount;
+	unsigned attachedShaderCount;
 	unsigned stringCount;
 
 	size_t stringPoolSize;
@@ -199,12 +193,12 @@ static char* readElementValue(char *pElement, ElementValue &result)
 	return next;
 }
 
-ParseResultCounts countParseResult(ParseResult const& parseResult)
+ParseElementCounts countParseElements(ParseElements const& elements)
 {
-	ParseResultCounts result = {};
+	ParseElementCounts result = {};
 
-	auto pElements = parseResult.elementsBegin;
-	while (pElements != parseResult.elementsEnd)
+	auto pElements = elements.begin;
+	while (pElements != elements.end)
 	{
 		ElementValue elementValue;
 		pElements = readElementValue(pElements, elementValue);
@@ -227,7 +221,7 @@ ParseResultCounts countParseResult(ParseResult const& parseResult)
 			auto attachedShaderCount = (unsigned) (attachedShadersEnd - attachedShadersBegin);
 
 			++result.programCount;
-			result.attachedShadersCount += attachedShaderCount;
+			result.attachedShaderCount += attachedShaderCount;
 			++result.stringCount;
 			result.stringPoolSize += stringSliceLength(pProgram->nameToken.value);
 		} break;
@@ -266,13 +260,13 @@ inline Shader* findShaderWithName(Shader *begin, Shader *end, StringReference na
 }
 
 void processShaders(
-	ParseResult const& parseResult,
+	ParseElements const& elements,
 	StringAllocator& stringAllocator,
 	Shader *shaderStorage)
 {
-	auto pElements = parseResult.elementsBegin;
+	auto pElements = elements.begin;
 	auto nextShader = shaderStorage;
-	while (pElements != parseResult.elementsEnd)
+	while (pElements != elements.end)
 	{
 		ElementValue elementValue;
 		pElements = readElementValue(pElements, elementValue);
@@ -320,16 +314,16 @@ inline Program* findProgramWithName(Program *begin, Program *end, StringReferenc
 }
 
 void processPrograms(
-	ParseResult const& parseResult,
+	ParseElements const& elements,
 	StringAllocator& stringAllocator,
 	Shaders shaders,
 	Program *programStorage,
 	Shader **attachedShaderStorage)
 {
-	auto pElements = parseResult.elementsBegin;
+	auto pElements = elements.begin;
 	auto nextProgram = programStorage;
 	auto nextAttachedShader = attachedShaderStorage;
-	while (pElements != parseResult.elementsEnd)
+	while (pElements != elements.end)
 	{
 		ElementValue elementValue;
 		pElements = readElementValue(pElements, elementValue);
@@ -392,14 +386,14 @@ RenderConfig* findRenderConfigWithName(
 }
 
 void processRenderConfigs(
-	ParseResult const& parseResult,
+	ParseElements const& elements,
 	StringAllocator& stringAllocator,
 	Programs programs,
 	RenderConfig *renderConfigStorage)
 {
-	auto pElements = parseResult.elementsBegin;
+	auto pElements = elements.begin;
 	auto nextRenderConfig = renderConfigStorage;
-	while (pElements != parseResult.elementsEnd)
+	while (pElements != elements.end)
 	{
 		ElementValue elementValue;
 		pElements = readElementValue(pElements, elementValue);
@@ -435,15 +429,15 @@ void processRenderConfigs(
 	}
 }
 
-ShaderBakerObjects processParseResult(ParseResult const& parseResult)
+ShaderBakerObjects processParseElements(ParseElements const& elements, LoaderErrorCollector& errorCollector)
 {
-	auto counts = countParseResult(parseResult);
+	auto counts = countParseElements(elements);
 
 	auto stringPoolSize = counts.stringCount * sizeof(size_t) + counts.stringPoolSize;
 	auto memoryBlockSize =
 		+ counts.shaderCount * sizeof(Shader)
 		+ counts.programCount * sizeof(Program)
-		+ counts.attachedShadersCount * sizeof(Shader*)
+		+ counts.attachedShaderCount * sizeof(Shader*)
 		+ counts.renderConfigCount * sizeof(RenderConfig)
 		+ stringPoolSize;
 	auto memoryBlock = malloc(memoryBlockSize);
@@ -451,7 +445,7 @@ ShaderBakerObjects processParseResult(ParseResult const& parseResult)
 	auto shaderStorage = (Shader*) memoryBlock;
 	auto programStorage = (Program*) (shaderStorage + counts.shaderCount);
 	auto attachedShaderStorage = (Shader**) (programStorage + counts.programCount);
-	auto renderConfigStorage = (RenderConfig*) (attachedShaderStorage + counts.attachedShadersCount);
+	auto renderConfigStorage = (RenderConfig*) (attachedShaderStorage + counts.attachedShaderCount);
 	auto stringPoolBegin = (char*) (renderConfigStorage + counts.renderConfigCount);
 
 	ShaderBakerObjects result = {};
@@ -459,13 +453,13 @@ ShaderBakerObjects processParseResult(ParseResult const& parseResult)
 	result.stringPool = stringPoolBegin;
 	result.shaders = {shaderStorage, shaderStorage + counts.shaderCount};
 	result.programs = {programStorage, programStorage + counts.programCount};
-	result.attachedShaders = {attachedShaderStorage, attachedShaderStorage + counts.attachedShadersCount};
+	result.attachedShaders = {attachedShaderStorage, attachedShaderStorage + counts.attachedShaderCount};
 	result.renderConfigs = {renderConfigStorage, renderConfigStorage + counts.renderConfigCount};
 
 	StringAllocator stringAllocator{stringPoolBegin};
-	processShaders(parseResult, stringAllocator, shaderStorage);
-	processPrograms(parseResult, stringAllocator, result.shaders, programStorage, attachedShaderStorage);
-	processRenderConfigs(parseResult, stringAllocator, result.programs, renderConfigStorage);
+	processShaders(elements, stringAllocator, shaderStorage);
+	processPrograms(elements, stringAllocator, result.shaders, programStorage, attachedShaderStorage);
+	processRenderConfigs(elements, stringAllocator, result.programs, renderConfigStorage);
 
 	return result;
 }
@@ -863,28 +857,34 @@ int main(int argc, char **argv)
 		initParser(*appState, parser, input);
 		parse(parser);
 
-		ParseResult parseResult = {};
+		auto version = parser.version;
 
-		parseResult.version = parser.version;
-
-		parseResult.elementsBegin = appState->elements;
-		parseResult.elementsEnd = parser.nextElementBegin;
-
-		parseResult.errorsBegin = appState->loaderErrors;
-		parseResult.errorsEnd = parser.errorCollector.next;
-
-		bool hasErrors = parseResult.errorsBegin != parseResult.errorsEnd;
-		if (hasErrors)
+		auto errorsBegin = appState->loaderErrors;
+		auto parserErrorsEnd = parser.errorCollector.next;
+		bool hasParseErrors = errorsBegin != parserErrorsEnd;
+		if (hasParseErrors)
 		{
-			printLoaderErrors(parseResult.errorsBegin, parseResult.errorsEnd);
+			puts("Parsing failed\n");
+			printLoaderErrors(errorsBegin, parserErrorsEnd);
 		} else
 		{
-			puts("Load successful\n");
+			puts("Parsing succeeded\n");
 
-			printf("Version %d.%d\n", parseResult.version.major, parseResult.version.minor);
+			LoaderErrorCollector errorCollector{errorsBegin, ArrayEnd(appState->loaderErrors)};
+			auto objects = processParseElements(
+				ParseElements{appState->elements, parser.nextElementBegin}, errorCollector);
+			auto loaderErrorsEnd = errorCollector.next;
+			bool hasSemanticErrors = errorsBegin != loaderErrorsEnd;
+			if (hasSemanticErrors)
+			{
+				puts("Loading failed\n");
+				printLoaderErrors(errorsBegin, loaderErrorsEnd);
+			} else
+			{
+				printf("Version %d.%d\n", version.major, version.minor);
+				printShaderBakerObjects(objects);
+			}
 
-			auto objects = processParseResult(parseResult);
-			printShaderBakerObjects(objects);
 			free(objects.memoryBlock);
 		}
 	}
