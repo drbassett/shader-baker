@@ -65,6 +65,7 @@ struct RenderConfigElement
 
 enum struct LoaderErrorType
 {
+	OutOfElementSpace,
 	MissingVersionStatement,
 	MissingMajorVersion,
 	MissingMinorVersion,
@@ -79,10 +80,6 @@ enum struct LoaderErrorType
 	EmptyTupleWord,
 	InvalidWordCharacter,
 	UnexpectedBlockType,
-	ExceededMaxShaderCount,
-	ExceededMaxProgramCount,
-	ExceededMaxAttachedShaderCount,
-	ExceededMaxRenderConfigCount,
 	RenderConfigMissingProgram,
 	RenderConfigMultiplePrograms,
 	RenderConfigMissingPrimitive,

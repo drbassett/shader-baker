@@ -8,9 +8,6 @@
 
 //TODO Clean up skipWhitespace() calls.
 
-//TODO Remove the ExceededMaxXxxCountErrors. Since all tokens are put in the same
-//     list now, these errors can be consolidated into a single error.
-
 #include <cassert>
 #include <cstdlib>
 
@@ -640,14 +637,8 @@ char* loaderErrorTypeToString(LoaderErrorType errorType)
 		return "Count value is empty or invalid";
 	case LoaderErrorType::UnexpectedBlockType:
 		return "Unexpected block type";
-	case LoaderErrorType::ExceededMaxShaderCount:
-		return "Too many shaders!";
-	case LoaderErrorType::ExceededMaxProgramCount:
-		return "Too many programs!";
-	case LoaderErrorType::ExceededMaxAttachedShaderCount:
-		return "Too many attached shaders!";
-	case LoaderErrorType::ExceededMaxRenderConfigCount:
-		return "Too many rendering configurations!";
+	case LoaderErrorType::OutOfElementSpace:
+		return "Too many elements!";
 	case LoaderErrorType::DuplicateShaderName:
 		return "Another shader already has this name";
 	case LoaderErrorType::DuplicateProgramName:

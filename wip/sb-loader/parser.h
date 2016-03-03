@@ -116,6 +116,7 @@ static bool addRenderConfigElement(Parser& parser, RenderConfigElement const& re
 		parser, ElementType::RenderConfig, sizeof(renderConfig));
 	if (elementSlot == nullptr)
 	{
+		addParserError(parser, LoaderErrorType::OutOfElementSpace);
 		return false;
 	}
 
@@ -563,7 +564,6 @@ exitLoop:
 
 	if (!addRenderConfigElement(parser, result))
 	{
-		addParserError(parser, LoaderErrorType::ExceededMaxRenderConfigCount);
 		return false;
 	}
 
@@ -582,7 +582,6 @@ static bool readShaderElement(Parser& parser, StringToken nameToken, ShaderType 
 	ShaderElement* shader = addShaderElement(parser);
 	if (shader == nullptr)
 	{
-		addParserError(parser, LoaderErrorType::ExceededMaxShaderCount);
 		return false;
 	}
 
@@ -664,10 +663,9 @@ void parse(Parser& parser)
 			}
 		} else if (type == "Program")
 		{
-			ProgramElement* program = addProgramElement(parser);
+			auto program = addProgramElement(parser);
 			if (program == nullptr)
 			{
-				addParserError(parser, LoaderErrorType::ExceededMaxProgramCount);
 				return;
 			}
 
@@ -690,7 +688,6 @@ void parse(Parser& parser)
 				auto shaderNameTokenSlot = addAttachedShader(parser);
 				if (shaderNameTokenSlot == nullptr)
 				{
-					addParserError(parser, LoaderErrorType::ExceededMaxAttachedShaderCount);
 					return;
 				}
 
