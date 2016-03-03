@@ -63,6 +63,43 @@ struct RenderConfigElement
 	unsigned drawCount;
 };
 
+enum struct LoaderErrorType
+{
+	MissingVersionStatement,
+	MissingMajorVersion,
+	MissingMinorVersion,
+	VersionMissingDot,
+	UnsupportedVersion,
+	MissingBlockBegin,
+	UnclosedBlock,
+	MissingPathBegin,
+	UnclosedPath,
+	MissingIdentifier,
+	MissingBlockType,
+	EmptyTupleWord,
+	InvalidWordCharacter,
+	UnexpectedBlockType,
+	ExceededMaxShaderCount,
+	ExceededMaxProgramCount,
+	ExceededMaxAttachedShaderCount,
+	ExceededMaxRenderConfigCount,
+	RenderConfigMissingProgram,
+	RenderConfigMultiplePrograms,
+	RenderConfigMissingPrimitive,
+	UnknownDrawPrimitive,
+	RenderConfigMultiplePrimitives,
+	RenderConfigMissingCount,
+	RenderConfigMultipleCounts,
+	RenderConfigEmptyProgramName,
+	RenderConfigEmptyOrInvalidCount,
+};
+
+struct LoaderError
+{
+	LoaderErrorType type;
+	TextDocumentLocation location;
+};
+
 inline void unreachable()
 {
 	assert(false);

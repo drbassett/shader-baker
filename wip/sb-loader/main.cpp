@@ -26,8 +26,8 @@ struct ParseResult
 	char *elementsBegin;
 	char *elementsEnd;
 
-	ParseError *errorsBegin;
-	ParseError *errorsEnd;
+	LoaderError *errorsBegin;
+	LoaderError *errorsEnd;
 };
 
 struct Shader
@@ -561,7 +561,7 @@ struct ApplicationState
 	char elements[1024 * 1024 * 1];
 
 	// 64 errors should be plenty for a person to deal with at once
-	ParseError parseErrors[64];
+	LoaderError loaderErrors[64];
 };
 
 inline size_t megabytes(size_t n)
@@ -569,63 +569,63 @@ inline size_t megabytes(size_t n)
 	return 1024 * 1024 * n;
 }
 
-char* parseErrorTypeToStr(ParseErrorType errorType)
+char* parseErrorTypeToStr(LoaderErrorType errorType)
 {
 	switch (errorType)
 	{
-	case ParseErrorType::MissingVersionStatement:
+	case LoaderErrorType::MissingVersionStatement:
 		return "The Version statement must be the first one";
-	case ParseErrorType::MissingMajorVersion:
+	case LoaderErrorType::MissingMajorVersion:
 		return "Missing major version";
-	case ParseErrorType::MissingMinorVersion:
+	case LoaderErrorType::MissingMinorVersion:
 		return "Missing minor version";
-	case ParseErrorType::VersionMissingDot:
+	case LoaderErrorType::VersionMissingDot:
 		return "Expected '.' character after major version";
-	case ParseErrorType::UnsupportedVersion:
+	case LoaderErrorType::UnsupportedVersion:
 		return "Version is unsupported by this version of Shader Baker";
-	case ParseErrorType::MissingBlockBegin:
+	case LoaderErrorType::MissingBlockBegin:
 		return "Missing start of block";
-	case ParseErrorType::UnclosedBlock:
+	case LoaderErrorType::UnclosedBlock:
 		return "Unclosed block";
-	case ParseErrorType::MissingPathBegin:
+	case LoaderErrorType::MissingPathBegin:
 		return "Missing start of path";
-	case ParseErrorType::UnclosedPath:
+	case LoaderErrorType::UnclosedPath:
 		return "Unclosed path";
-	case ParseErrorType::MissingIdentifier:
+	case LoaderErrorType::MissingIdentifier:
 		return "Statement must begin with an identifier";
-	case ParseErrorType::MissingBlockType:
+	case LoaderErrorType::MissingBlockType:
 		return "Statement type must follow identifier";
-	case ParseErrorType::EmptyTupleWord:
+	case LoaderErrorType::EmptyTupleWord:
 		return "Tuple contains an empty word";
-	case ParseErrorType::InvalidWordCharacter:
+	case LoaderErrorType::InvalidWordCharacter:
 		return "Invalid character in word";
-	case ParseErrorType::RenderConfigMissingProgram:
+	case LoaderErrorType::RenderConfigMissingProgram:
 		return "Missing Program block in a RenderConfig block";
-	case ParseErrorType::RenderConfigMultiplePrograms:
+	case LoaderErrorType::RenderConfigMultiplePrograms:
 		return "Multiple Program blocks declared in a RenderConfig block";
-	case ParseErrorType::RenderConfigMissingPrimitive:
+	case LoaderErrorType::RenderConfigMissingPrimitive:
 		return "Missing Primitive block in a RenderConfig block";
-	case ParseErrorType::UnknownDrawPrimitive:
+	case LoaderErrorType::UnknownDrawPrimitive:
 		return "Unknown draw primitive type in a Primitive block";
-	case ParseErrorType::RenderConfigMultiplePrimitives:
+	case LoaderErrorType::RenderConfigMultiplePrimitives:
 		return "Multiple Primitive blocks declared in a RenderConfig block";
-	case ParseErrorType::RenderConfigMissingCount:
+	case LoaderErrorType::RenderConfigMissingCount:
 		return "Missing Count block in a RenderConfig block";
-	case ParseErrorType::RenderConfigMultipleCounts:
+	case LoaderErrorType::RenderConfigMultipleCounts:
 		return "Multiple Count blocks declared in a RenderConfig block";
-	case ParseErrorType::RenderConfigEmptyProgramName:
+	case LoaderErrorType::RenderConfigEmptyProgramName:
 		return "Program name is empty";
-	case ParseErrorType::RenderConfigEmptyOrInvalidCount:
+	case LoaderErrorType::RenderConfigEmptyOrInvalidCount:
 		return "Count value is empty or invalid";
-	case ParseErrorType::UnexpectedBlockType:
+	case LoaderErrorType::UnexpectedBlockType:
 		return "Unexpected block type";
-	case ParseErrorType::ExceededMaxShaderCount:
+	case LoaderErrorType::ExceededMaxShaderCount:
 		return "Too many shaders!";
-	case ParseErrorType::ExceededMaxProgramCount:
+	case LoaderErrorType::ExceededMaxProgramCount:
 		return "Too many programs!";
-	case ParseErrorType::ExceededMaxAttachedShaderCount:
+	case LoaderErrorType::ExceededMaxAttachedShaderCount:
 		return "Too many attached shaders!";
-	case ParseErrorType::ExceededMaxRenderConfigCount:
+	case LoaderErrorType::ExceededMaxRenderConfigCount:
 		return "Too many rendering configurations!";
 	default:
 		unreachable();
@@ -633,7 +633,7 @@ char* parseErrorTypeToStr(ParseErrorType errorType)
 	}
 }
 
-void printParseErrors(ParseError* begin, ParseError* end)
+void printLoaderErrors(LoaderError* begin, LoaderError* end)
 {
 	while (begin != end)
 	{
@@ -827,8 +827,8 @@ void initParser(ApplicationState& appState, Parser& parser, StringSlice input)
 	parser.nextElementBegin = appState.elements;
 	parser.elementsEnd = ArrayEnd(appState.elements);
 
-	parser.nextErrorSlot = appState.parseErrors;
-	parser.errorsEnd = ArrayEnd(appState.parseErrors);
+	parser.nextErrorSlot = appState.loaderErrors;
+	parser.errorsEnd = ArrayEnd(appState.loaderErrors);
 
 	parser.lineNumber = 1;
 	parser.lineBegin = parser.cursor;
@@ -870,13 +870,13 @@ int main(int argc, char **argv)
 		parseResult.elementsBegin = appState->elements;
 		parseResult.elementsEnd = parser.nextElementBegin;
 
-		parseResult.errorsBegin = appState->parseErrors;
+		parseResult.errorsBegin = appState->loaderErrors;
 		parseResult.errorsEnd = parser.nextErrorSlot;
 
 		bool hasErrors = parseResult.errorsBegin != parseResult.errorsEnd;
 		if (hasErrors)
 		{
-			printParseErrors(parseResult.errorsBegin, parseResult.errorsEnd);
+			printLoaderErrors(parseResult.errorsBegin, parseResult.errorsEnd);
 		} else
 		{
 			puts("Load successful\n");

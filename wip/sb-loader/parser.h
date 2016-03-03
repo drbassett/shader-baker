@@ -5,43 +5,6 @@ struct Version
 	unsigned major, minor;
 };
 
-enum struct ParseErrorType
-{
-	MissingVersionStatement,
-	MissingMajorVersion,
-	MissingMinorVersion,
-	VersionMissingDot,
-	UnsupportedVersion,
-	MissingBlockBegin,
-	UnclosedBlock,
-	MissingPathBegin,
-	UnclosedPath,
-	MissingIdentifier,
-	MissingBlockType,
-	EmptyTupleWord,
-	InvalidWordCharacter,
-	UnexpectedBlockType,
-	ExceededMaxShaderCount,
-	ExceededMaxProgramCount,
-	ExceededMaxAttachedShaderCount,
-	ExceededMaxRenderConfigCount,
-	RenderConfigMissingProgram,
-	RenderConfigMultiplePrograms,
-	RenderConfigMissingPrimitive,
-	UnknownDrawPrimitive,
-	RenderConfigMultiplePrimitives,
-	RenderConfigMissingCount,
-	RenderConfigMultipleCounts,
-	RenderConfigEmptyProgramName,
-	RenderConfigEmptyOrInvalidCount,
-};
-
-struct ParseError
-{
-	ParseErrorType type;
-	TextDocumentLocation location;
-};
-
 struct Parser
 {
 	char *cursor;
@@ -55,8 +18,8 @@ struct Parser
 	char *nextElementBegin;
 	char *elementsEnd;
 
-	ParseError *nextErrorSlot;
-	ParseError *errorsEnd;
+	LoaderError *nextErrorSlot;
+	LoaderError *errorsEnd;
 };
 
 static inline TextDocumentLocation getParserLocation(Parser const& parser)
@@ -73,7 +36,7 @@ static inline void incrementParserLineNumber(Parser& parser)
 	parser.lineBegin = parser.cursor;
 }
 
-static void addParseError(Parser& parser, ParseErrorType const& error)
+static void addLoaderError(Parser& parser, LoaderErrorType const& error)
 {
 	if (parser.nextErrorSlot != parser.errorsEnd)
 	{
@@ -249,7 +212,7 @@ static bool endBlock(Parser& parser)
 	skipWhitespace(parser);
 	if (parser.cursor == parser.end || *parser.cursor != '}')
 	{
-		addParseError(parser, ParseErrorType::UnclosedBlock);
+		addLoaderError(parser, LoaderErrorType::UnclosedBlock);
 		return false;
 	}
 	++parser.cursor;
@@ -264,20 +227,20 @@ static bool beginNamedBlock(Parser& parser, StringSlice& result)
 	result = readWord(parser);
 	if (result.begin == result.end)
 	{
-		addParseError(parser, ParseErrorType::MissingBlockType);
+		addLoaderError(parser, LoaderErrorType::MissingBlockType);
 		return false;
 	}
 	skipWhitespace(parser);
 
 	if (parser.cursor == parser.end)
 	{
-		addParseError(parser, ParseErrorType::MissingBlockBegin);
+		addLoaderError(parser, LoaderErrorType::MissingBlockBegin);
 		return false;
 	}
 
 	if (*parser.cursor != '{')
 	{
-		addParseError(parser, ParseErrorType::InvalidWordCharacter);
+		addLoaderError(parser, LoaderErrorType::InvalidWordCharacter);
 		return false;
 	}
 
@@ -298,7 +261,7 @@ static bool readPathBlock(Parser& parser, StringSlice& result)
 {
 	if (parser.cursor == parser.end || *parser.cursor != '\'')
 	{
-		addParseError(parser, ParseErrorType::MissingPathBegin);
+		addLoaderError(parser, LoaderErrorType::MissingPathBegin);
 		return false;
 	}
 	++parser.cursor;
@@ -312,7 +275,7 @@ static bool readPathBlock(Parser& parser, StringSlice& result)
 
 		if (parser.cursor == parser.end)
 		{
-			addParseError(parser, ParseErrorType::UnclosedPath);
+			addLoaderError(parser, LoaderErrorType::UnclosedPath);
 			return false;
 		}
 
@@ -323,7 +286,7 @@ static bool readPathBlock(Parser& parser, StringSlice& result)
 		{
 			if (parser.cursor == parser.end)
 			{
-				addParseError(parser, ParseErrorType::UnclosedBlock);
+				addLoaderError(parser, LoaderErrorType::UnclosedBlock);
 				return false;
 			}
 
@@ -350,7 +313,7 @@ static bool readNextTupleWord(Parser& parser, StringSlice& result)
 
 	if (parser.cursor == parser.end)
 	{
-		addParseError(parser, ParseErrorType::UnclosedBlock);
+		addLoaderError(parser, LoaderErrorType::UnclosedBlock);
 		return false;
 	}
 	if (*parser.cursor == '}')
@@ -364,7 +327,7 @@ static bool readNextTupleWord(Parser& parser, StringSlice& result)
 	
 	if (parser.cursor == parser.end)
 	{
-		addParseError(parser, ParseErrorType::UnclosedBlock);
+		addLoaderError(parser, LoaderErrorType::UnclosedBlock);
 		return false;
 	}
 
@@ -375,7 +338,7 @@ static bool readNextTupleWord(Parser& parser, StringSlice& result)
 		skipWhitespace(parser);
 		if (result.begin == result.end)
 		{
-			addParseError(parser, ParseErrorType::EmptyTupleWord);
+			addLoaderError(parser, LoaderErrorType::EmptyTupleWord);
 			return false;
 		}
 		return true;
@@ -383,7 +346,7 @@ static bool readNextTupleWord(Parser& parser, StringSlice& result)
 		// consume this brace on the next call to this method
 		return true;
 	default:
-		addParseError(parser, ParseErrorType::InvalidWordCharacter);
+		addLoaderError(parser, LoaderErrorType::InvalidWordCharacter);
 		return false;
 	}
 }
@@ -397,7 +360,7 @@ static bool skipBlock(Parser& parser)
 	{
 		if (parser.cursor == parser.end)
 		{
-			addParseError(parser, ParseErrorType::UnclosedBlock);
+			addLoaderError(parser, LoaderErrorType::UnclosedBlock);
 			return false;
 		}
 
@@ -431,32 +394,32 @@ static bool readVersionStatement(Parser& parser)
 
 	if (type != "Version")
 	{
-		addParseError(parser, ParseErrorType::MissingVersionStatement);
+		addLoaderError(parser, LoaderErrorType::MissingVersionStatement);
 		return false;
 	}
 
 	if (!readUint(parser, parser.version.major))
 	{
-		addParseError(parser, ParseErrorType::MissingMajorVersion);
+		addLoaderError(parser, LoaderErrorType::MissingMajorVersion);
 		return false;
 	}
 
 	if (parser.cursor == parser.end || *parser.cursor != '.')
 	{
-		addParseError(parser, ParseErrorType::VersionMissingDot);
+		addLoaderError(parser, LoaderErrorType::VersionMissingDot);
 		return false;
 	}
 	++parser.cursor;
 
 	if (!readUint(parser, parser.version.minor))
 	{
-		addParseError(parser, ParseErrorType::MissingMinorVersion);
+		addLoaderError(parser, LoaderErrorType::MissingMinorVersion);
 		return false;
 	}
 
 	if (parser.version.major != 0 || parser.version.minor != 1)
 	{
-		addParseError(parser, ParseErrorType::UnsupportedVersion);
+		addLoaderError(parser, LoaderErrorType::UnsupportedVersion);
 		return false;
 	}
 	
@@ -511,7 +474,7 @@ static bool readRenderConfigElement(Parser& parser, StringToken nameToken)
 	{
 		if (parser.cursor == parser.end)
 		{
-			addParseError(parser, ParseErrorType::UnclosedBlock);
+			addLoaderError(parser, LoaderErrorType::UnclosedBlock);
 			return false;
 		}
 
@@ -532,7 +495,7 @@ static bool readRenderConfigElement(Parser& parser, StringToken nameToken)
 		{
 			if (hasProgramBlock)
 			{
-				addParseError(parser, ParseErrorType::RenderConfigMultiplePrograms);
+				addLoaderError(parser, LoaderErrorType::RenderConfigMultiplePrograms);
 			}
 			hasProgramBlock = true;
 
@@ -543,13 +506,13 @@ static bool readRenderConfigElement(Parser& parser, StringToken nameToken)
 			}
 			if (isStringSliceEmpty(result.programNameToken.value))
 			{
-				addParseError(parser, ParseErrorType::RenderConfigEmptyProgramName);
+				addLoaderError(parser, LoaderErrorType::RenderConfigEmptyProgramName);
 			}
 		} else if (type == "Primitive")
 		{
 			if (hasPrimitiveBlock)
 			{
-				addParseError(parser, ParseErrorType::RenderConfigMultiplePrimitives);
+				addLoaderError(parser, LoaderErrorType::RenderConfigMultiplePrimitives);
 			}
 			hasPrimitiveBlock = true;
 
@@ -561,19 +524,19 @@ static bool readRenderConfigElement(Parser& parser, StringToken nameToken)
 
 			if (!stringToDrawPrimitive(primitiveName, result.primitive))
 			{
-				addParseError(parser, ParseErrorType::UnknownDrawPrimitive);
+				addLoaderError(parser, LoaderErrorType::UnknownDrawPrimitive);
 			}
 		} else if (type == "Count")
 		{
 			if (hasCountBlock)
 			{
-				addParseError(parser, ParseErrorType::RenderConfigMultipleCounts);
+				addLoaderError(parser, LoaderErrorType::RenderConfigMultipleCounts);
 			}
 			hasCountBlock = true;
 
 			if (!readUint(parser, result.drawCount))
 			{
-				addParseError(parser, ParseErrorType::RenderConfigEmptyOrInvalidCount);
+				addLoaderError(parser, LoaderErrorType::RenderConfigEmptyOrInvalidCount);
 				return false;
 			}
 
@@ -583,7 +546,7 @@ static bool readRenderConfigElement(Parser& parser, StringToken nameToken)
 			}
 		} else
 		{
-			addParseError(parser, ParseErrorType::UnexpectedBlockType);
+			addLoaderError(parser, LoaderErrorType::UnexpectedBlockType);
 			return false;
 		}
 	}
@@ -591,20 +554,20 @@ static bool readRenderConfigElement(Parser& parser, StringToken nameToken)
 exitLoop:
 	if (!hasProgramBlock)
 	{
-		addParseError(parser, ParseErrorType::RenderConfigMissingProgram);
+		addLoaderError(parser, LoaderErrorType::RenderConfigMissingProgram);
 	}
 	if (!hasPrimitiveBlock)
 	{
-		addParseError(parser, ParseErrorType::RenderConfigMissingPrimitive);
+		addLoaderError(parser, LoaderErrorType::RenderConfigMissingPrimitive);
 	}
 	if (!hasCountBlock)
 	{
-		addParseError(parser, ParseErrorType::RenderConfigMissingCount);
+		addLoaderError(parser, LoaderErrorType::RenderConfigMissingCount);
 	}
 
 	if (!addRenderConfigElement(parser, result))
 	{
-		addParseError(parser, ParseErrorType::ExceededMaxRenderConfigCount);
+		addLoaderError(parser, LoaderErrorType::ExceededMaxRenderConfigCount);
 		return false;
 	}
 
@@ -623,7 +586,7 @@ static bool readShaderElement(Parser& parser, StringToken nameToken, ShaderType 
 	ShaderElement* shader = addShaderElement(parser);
 	if (shader == nullptr)
 	{
-		addParseError(parser, ParseErrorType::ExceededMaxShaderCount);
+		addLoaderError(parser, LoaderErrorType::ExceededMaxShaderCount);
 		return false;
 	}
 
@@ -649,14 +612,14 @@ void parse(Parser& parser)
 		identifierToken.value = readWord(parser);
 		if (stringSliceLength(identifierToken.value) == 0)
 		{
-			addParseError(parser, ParseErrorType::MissingIdentifier);
+			addLoaderError(parser, LoaderErrorType::MissingIdentifier);
 			return;
 		}
 		skipWhitespace(parser);
 
 		if (parser.cursor == parser.end || !isWordCharacter(*parser.cursor))
 		{
-			addParseError(parser, ParseErrorType::InvalidWordCharacter);
+			addLoaderError(parser, LoaderErrorType::InvalidWordCharacter);
 			return;
 		}
 
@@ -708,7 +671,7 @@ void parse(Parser& parser)
 			ProgramElement* program = addProgramElement(parser);
 			if (program == nullptr)
 			{
-				addParseError(parser, ParseErrorType::ExceededMaxProgramCount);
+				addLoaderError(parser, LoaderErrorType::ExceededMaxProgramCount);
 				return;
 			}
 
@@ -731,7 +694,7 @@ void parse(Parser& parser)
 				auto shaderNameTokenSlot = addAttachedShader(parser);
 				if (shaderNameTokenSlot == nullptr)
 				{
-					addParseError(parser, ParseErrorType::ExceededMaxAttachedShaderCount);
+					addLoaderError(parser, LoaderErrorType::ExceededMaxAttachedShaderCount);
 					return;
 				}
 
@@ -746,7 +709,7 @@ void parse(Parser& parser)
 			}
 		} else
 		{
-			addParseError(parser, ParseErrorType::UnexpectedBlockType);
+			addLoaderError(parser, LoaderErrorType::UnexpectedBlockType);
 			if (!skipBlock(parser))
 			{
 				return;
