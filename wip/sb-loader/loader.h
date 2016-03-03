@@ -30,23 +30,35 @@ enum struct DrawPrimitive
 	TriangleFan,
 };
 
+struct TextDocumentLocation
+{
+	unsigned lineNumber;
+	unsigned charNumber;
+};
+
+struct StringToken
+{
+	StringSlice value;
+	TextDocumentLocation location;
+};
+
 struct ShaderElement
 {
-	StringSlice name;
+	StringToken nameToken;
 	ShaderType type;
-	StringSlice path;
+	StringToken pathToken;
 };
 
 struct ProgramElement
 {
-	StringSlice name;
+	StringToken nameToken;
 	size_t attachedShaderCount;
 };
 
 struct RenderConfigElement
 {
-	StringSlice name;
-	StringSlice programName;
+	StringToken nameToken;
+	StringToken programNameToken;
 	DrawPrimitive primitive;
 	unsigned drawCount;
 };

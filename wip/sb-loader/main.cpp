@@ -8,6 +8,9 @@
 
 //TODO Clean up skipWhitespace() calls.
 
+//TODO Remove the ExceededMaxXxxCountErrors. Since all tokens are put in the same
+//     list now, these errors can be consolidated into a single error.
+
 #include <cassert>
 #include <cstdlib>
 
@@ -90,7 +93,7 @@ struct ElementValue
 		struct
 		{
 			ProgramElement *ptr;
-			StringSlice *attachedShadersBegin;
+			StringToken *attachedShadersBegin;
 		} program;
 
 		RenderConfigElement *renderConfig;
@@ -177,7 +180,7 @@ static char* readElementValue(char *pElement, ElementValue &result)
 	case ElementType::Program:
 	{
 		auto pProgram = (ProgramElement*) pElementValue;
-		auto attachedShadersBegin = (StringSlice*) (pProgram + 1);
+		auto attachedShadersBegin = (StringToken*) (pProgram + 1);
 		result.element.program = {pProgram, attachedShadersBegin};
 		next = (char*) (attachedShadersBegin + pProgram->attachedShaderCount);
 	} break;
@@ -213,8 +216,8 @@ ParseResultCounts countParseResult(ParseResult const& parseResult)
 			auto pShader = elementValue.element.shader;
 			++result.shaderCount;
 			result.stringCount += 2;
-			result.stringPoolSize += stringSliceLength(pShader->name);
-			result.stringPoolSize += stringSliceLength(pShader->path);
+			result.stringPoolSize += stringSliceLength(pShader->nameToken.value);
+			result.stringPoolSize += stringSliceLength(pShader->pathToken.value);
 		} break;
 		case ElementType::Program:
 		{
@@ -226,14 +229,14 @@ ParseResultCounts countParseResult(ParseResult const& parseResult)
 			++result.programCount;
 			result.attachedShadersCount += attachedShaderCount;
 			++result.stringCount;
-			result.stringPoolSize += stringSliceLength(pProgram->name);
+			result.stringPoolSize += stringSliceLength(pProgram->nameToken.value);
 		} break;
 		case ElementType::RenderConfig:
 		{
 			auto pRenderConfig = elementValue.element.renderConfig;
 			++result.renderConfigCount;
 			++result.stringCount;
-			result.stringPoolSize += stringSliceLength(pRenderConfig->name);
+			result.stringPoolSize += stringSliceLength(pRenderConfig->nameToken.value);
 		} break;
 		default:
 			unreachable();
@@ -280,8 +283,8 @@ void processShaders(
 		{
 			auto pShader = elementValue.element.shader;
 
-			auto shaderName = copyStringSlice(stringAllocator, pShader->name);
-			auto shaderPath = copyRawPath(stringAllocator, pShader->path);
+			auto shaderName = copyStringSlice(stringAllocator, pShader->nameToken.value);
+			auto shaderPath = copyRawPath(stringAllocator, pShader->pathToken.value);
 
 			if (findShaderWithName(shaderStorage, nextShader, shaderName) != nullptr)
 			{
@@ -336,19 +339,20 @@ void processPrograms(
 		case ElementType::Program:
 		{
 			auto pProgram = elementValue.element.program.ptr;
-			auto attachedShaderNamesBegin = elementValue.element.program.attachedShadersBegin;
-			auto attachedShadersEnd = attachedShaderNamesBegin + pProgram->attachedShaderCount;
+			auto attachedShaderNameTokensBegin = elementValue.element.program.attachedShadersBegin;
+			auto attachedShaderNameTokensEnd = attachedShaderNameTokensBegin + pProgram->attachedShaderCount;
 
-			auto programName = copyStringSlice(stringAllocator, pProgram->name);
+			auto programName = copyStringSlice(stringAllocator, pProgram->nameToken.value);
 			if (findProgramWithName(programStorage, nextProgram, programName) != nullptr)
 			{
 //TODO ERROR duplicate shader name
 			}
 
 			auto attachedShadersBegin = nextAttachedShader;
-			while (attachedShaderNamesBegin != attachedShadersEnd)
+			while (attachedShaderNameTokensBegin != attachedShaderNameTokensEnd)
 			{
-				auto attachedShader = findShaderWithName(shaders.begin, shaders.end, *attachedShaderNamesBegin);
+				auto attachedShader = findShaderWithName(
+					shaders.begin, shaders.end, attachedShaderNameTokensBegin->value);
 				if (attachedShader == nullptr)
 				{
 //TODO ERROR could not find shader with name
@@ -357,7 +361,7 @@ void processPrograms(
 					*nextAttachedShader = attachedShader;
 				}
 
-				++attachedShaderNamesBegin;
+				++attachedShaderNameTokensBegin;
 				++nextAttachedShader;
 			}
 
@@ -406,14 +410,15 @@ void processRenderConfigs(
 		{
 			auto pRenderConfig = elementValue.element.renderConfig;
 
-			auto renderConfigName = copyStringSlice(stringAllocator, pRenderConfig->name);
+			auto renderConfigName = copyStringSlice(stringAllocator, pRenderConfig->nameToken.value);
 			if (findRenderConfigWithName(renderConfigStorage, nextRenderConfig, renderConfigName) != nullptr)
 			{
 //TODO ERROR duplicate render config name
 			}
 
 
-			auto program = findProgramWithName(programs.begin, programs.end, pRenderConfig->programName);
+			auto program = findProgramWithName(
+				programs.begin, programs.end, pRenderConfig->programNameToken.value);
 			if (program == nullptr)
 			{
 //TODO ERROR could not find program with name
@@ -635,8 +640,8 @@ void printParseErrors(ParseError* begin, ParseError* end)
 		printf(
 			"ERROR %d (line %d, character %d): %s\n",
 			(unsigned) begin->type,
-			begin->lineNumber,
-			begin->charNumber,
+			begin->location.lineNumber,
+			begin->location.charNumber,
 			parseErrorTypeToStr(begin->type));
 		++begin;
 	}

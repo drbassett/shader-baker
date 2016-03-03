@@ -39,8 +39,7 @@ enum struct ParseErrorType
 struct ParseError
 {
 	ParseErrorType type;
-	unsigned lineNumber;
-	unsigned charNumber;
+	TextDocumentLocation location;
 };
 
 struct Parser
@@ -60,9 +59,12 @@ struct Parser
 	ParseError *errorsEnd;
 };
 
-static inline unsigned getParserCharNumber(Parser const& parser)
+static inline TextDocumentLocation getParserLocation(Parser const& parser)
 {
-	return (unsigned) (parser.cursor - parser.lineBegin + 1);
+	TextDocumentLocation result;
+	result.charNumber = (unsigned) (parser.cursor - parser.lineBegin + 1);
+	result.lineNumber = parser.lineNumber;
+	return result;
 }
 
 static inline void incrementParserLineNumber(Parser& parser)
@@ -75,10 +77,9 @@ static void addParseError(Parser& parser, ParseErrorType const& error)
 {
 	if (parser.nextErrorSlot != parser.errorsEnd)
 	{
-		auto slot = parser.nextErrorSlot;
-		slot->type = error;
-		slot->lineNumber = parser.lineNumber;
-		slot->charNumber = getParserCharNumber(parser);
+		parser.nextErrorSlot = {};
+		parser.nextErrorSlot->type = error;
+		parser.nextErrorSlot->location = getParserLocation(parser);
 		++parser.nextErrorSlot;
 	}
 }
@@ -138,9 +139,9 @@ static ProgramElement* addProgramElement(Parser& parser)
 	return elementSlot;
 }
 
-static StringSlice* addAttachedShader(Parser& parser)
+static StringToken* addAttachedShader(Parser& parser)
 {
-	auto elementSlot = (StringSlice*) reserveElementMemory(parser, sizeof(StringSlice));
+	auto elementSlot = (StringToken*) reserveElementMemory(parser, sizeof(StringToken));
 	if (elementSlot == nullptr)
 	{
 		return nullptr;
@@ -498,10 +499,10 @@ bool stringToDrawPrimitive(StringSlice string, DrawPrimitive& result)
 	return true;
 }
 
-static bool readRenderConfigElement(Parser& parser, StringSlice name)
+static bool readRenderConfigElement(Parser& parser, StringToken nameToken)
 {
 	RenderConfigElement result = {};
-	result.name = name;
+	result.nameToken = nameToken;
 
 	bool hasProgramBlock = false;
 	bool hasPrimitiveBlock = false;
@@ -535,11 +536,12 @@ static bool readRenderConfigElement(Parser& parser, StringSlice name)
 			}
 			hasProgramBlock = true;
 
-			if (!readSingletonBlock(parser, result.programName))
+			result.programNameToken.location = getParserLocation(parser);
+			if (!readSingletonBlock(parser, result.programNameToken.value))
 			{
 				return false;
 			}
-			if (isStringSliceEmpty(result.programName))
+			if (isStringSliceEmpty(result.programNameToken.value))
 			{
 				addParseError(parser, ParseErrorType::RenderConfigEmptyProgramName);
 			}
@@ -609,10 +611,11 @@ exitLoop:
 	return true;
 }
 
-static bool readShaderElement(Parser& parser, StringSlice name, ShaderType type)
+static bool readShaderElement(Parser& parser, StringToken nameToken, ShaderType type)
 {
-	StringSlice path;
-	if (!readPathBlock(parser, path))
+	StringToken pathToken;
+	pathToken.location = getParserLocation(parser);
+	if (!readPathBlock(parser, pathToken.value))
 	{
 		return false;
 	}
@@ -624,9 +627,9 @@ static bool readShaderElement(Parser& parser, StringSlice name, ShaderType type)
 		return false;
 	}
 
-	shader->name = name;
+	shader->nameToken = nameToken;
 	shader->type = type;
-	shader->path = path;
+	shader->pathToken = pathToken;
 
 	return true;
 }
@@ -641,8 +644,10 @@ void parse(Parser& parser)
 
 	while (parser.cursor != parser.end)
 	{
-		auto identifier = readWord(parser);
-		if (identifier.begin == identifier.end)
+		StringToken identifierToken;
+		identifierToken.location = getParserLocation(parser);
+		identifierToken.value = readWord(parser);
+		if (stringSliceLength(identifierToken.value) == 0)
 		{
 			addParseError(parser, ParseErrorType::MissingIdentifier);
 			return;
@@ -664,37 +669,37 @@ void parse(Parser& parser)
 //TODO maybe use a hash map rather than an 'if' cascade
 		if (type == "VertexShader")
 		{
-			if (!readShaderElement(parser, identifier, ShaderType::Vertex))
+			if (!readShaderElement(parser, identifierToken, ShaderType::Vertex))
 			{
 				return;
 			}
 		} else if (type == "TessControlShader")
 		{
-			if (!readShaderElement(parser, identifier, ShaderType::TessControl))
+			if (!readShaderElement(parser, identifierToken, ShaderType::TessControl))
 			{
 				return;
 			}
 		} else if (type == "TessEvalShader")
 		{
-			if (!readShaderElement(parser, identifier, ShaderType::TessEval))
+			if (!readShaderElement(parser, identifierToken, ShaderType::TessEval))
 			{
 				return;
 			}
 		} else if (type == "GeometryShader")
 		{
-			if (!readShaderElement(parser, identifier, ShaderType::Geometry))
+			if (!readShaderElement(parser, identifierToken, ShaderType::Geometry))
 			{
 				return;
 			}
 		} else if (type == "FragmentShader")
 		{
-			if (!readShaderElement(parser, identifier, ShaderType::Fragment))
+			if (!readShaderElement(parser, identifierToken, ShaderType::Fragment))
 			{
 				return;
 			}
 		} else if (type == "ComputeShader")
 		{
-			if (!readShaderElement(parser, identifier, ShaderType::Compute))
+			if (!readShaderElement(parser, identifierToken, ShaderType::Compute))
 			{
 				return;
 			}
@@ -707,34 +712,35 @@ void parse(Parser& parser)
 				return;
 			}
 
-			program->name = identifier;
+			program->nameToken = identifierToken;
 
 			for (;;)
 			{
-				StringSlice shaderName;
-				if (!readNextTupleWord(parser, shaderName))
+				StringToken shaderNameToken;
+				shaderNameToken.location = getParserLocation(parser);
+				if (!readNextTupleWord(parser, shaderNameToken.value))
 				{
 					return;
 				}
 
-				if (shaderName.begin == 0)
+				if (shaderNameToken.value.begin == 0)
 				{
 					break;
 				}
 
-				StringSlice* shaderNameSlot = addAttachedShader(parser);
-				if (shaderNameSlot == nullptr)
+				auto shaderNameTokenSlot = addAttachedShader(parser);
+				if (shaderNameTokenSlot == nullptr)
 				{
 					addParseError(parser, ParseErrorType::ExceededMaxAttachedShaderCount);
 					return;
 				}
 
-				*shaderNameSlot = shaderName;
+				*shaderNameTokenSlot = shaderNameToken;
 				++program->attachedShaderCount;
 			}
 		} else if (type == "RenderConfig")
 		{
-			if (!readRenderConfigElement(parser, identifier))
+			if (!readRenderConfigElement(parser, identifierToken))
 			{
 				return;
 			}
