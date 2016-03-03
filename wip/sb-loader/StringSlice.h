@@ -1,5 +1,3 @@
-#pragma once
-
 struct StringSlice
 {
 	char *begin, *end;

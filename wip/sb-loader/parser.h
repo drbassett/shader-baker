@@ -1,5 +1,3 @@
-#include "StringSlice.h"
-
 struct Version
 {
 	unsigned major, minor;

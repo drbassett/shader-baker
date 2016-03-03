@@ -1,5 +1,3 @@
-#include "StringSlice.h"
-
 enum struct ElementType
 {
 	Shader,
