@@ -827,8 +827,8 @@ void initParser(ApplicationState& appState, Parser& parser, StringSlice input)
 	parser.nextElementBegin = appState.elements;
 	parser.elementsEnd = ArrayEnd(appState.elements);
 
-	parser.nextErrorSlot = appState.loaderErrors;
-	parser.errorsEnd = ArrayEnd(appState.loaderErrors);
+	parser.errorCollector.next = appState.loaderErrors;
+	parser.errorCollector.end = ArrayEnd(appState.loaderErrors);
 
 	parser.lineNumber = 1;
 	parser.lineBegin = parser.cursor;
@@ -871,7 +871,7 @@ int main(int argc, char **argv)
 		parseResult.elementsEnd = parser.nextElementBegin;
 
 		parseResult.errorsBegin = appState->loaderErrors;
-		parseResult.errorsEnd = parser.nextErrorSlot;
+		parseResult.errorsEnd = parser.errorCollector.next;
 
 		bool hasErrors = parseResult.errorsBegin != parseResult.errorsEnd;
 		if (hasErrors)

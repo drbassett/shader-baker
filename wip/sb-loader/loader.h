@@ -100,8 +100,22 @@ struct LoaderError
 	TextDocumentLocation location;
 };
 
+struct LoaderErrorCollector
+{
+	LoaderError *next, *end;
+};
+
 inline void unreachable()
 {
 	assert(false);
+}
+
+void addLoaderError(LoaderErrorCollector& errorCollector, LoaderError error)
+{
+	if (errorCollector.next != errorCollector.end)
+	{
+		*errorCollector.next = error;
+		++errorCollector.next;
+	}
 }
 
