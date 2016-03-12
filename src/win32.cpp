@@ -4,6 +4,7 @@
 
 #pragma warning(pop)
 
+#include "Types.h"
 #include "ShaderBaker.cpp"
 #include "../include/wglext.h"
 #include <cstdio>

@@ -1,6 +1,22 @@
+#include <cstdio>
 #include <gl/gl.h>
 #include "../include/glcorearb.h"
 #include "generated/glFunctions.cpp"
+
+#define arrayLength(array) sizeof(array) / sizeof(array[0])
+
+struct GlyphMetrics
+{
+	i32 offsetTop, offsetLeft;
+	u32 advanceX;
+};
+
+struct AsciiFont
+{
+	u32 bitmapWidth, bitmapHeight;
+	u32 advanceY;
+	GlyphMetrics glyphMetrics[256];
+};
 
 struct SimpleRenderConfig
 {
@@ -19,15 +35,15 @@ struct TextRenderConfig
 
 	GLuint program;
 	GLint unifViewportSizePx, unifCharacterSizePx, unifCharacterSampler;
-	GLint attribLowerLeftCorner, attribCharacterIndex;
+	GLint attribLowerLeft, attribCharacterIndex;
 };
 
 struct ApplicationState
 {
+	AsciiFont font;
 	SimpleRenderConfig simpleRenderConfig;
 	TextRenderConfig textRenderConfig;
 	unsigned windowWidth, windowHeight;
-	unsigned charWidth, charHeight;
 };
 
 static bool compileShaderChecked(
@@ -143,16 +159,15 @@ inline bool createTextRenderingProgram(GLsizei maxLogLength, GLchar* infoLog, GL
 
 		uniform vec2 viewportSizePx;
 
-		layout(location = 0) in uvec2 lowerLeftCorner;
+		layout(location = 0) in uvec2 topLeft;
 		layout(location = 1) in uint characterIndex;
 
 		flat out uint vsCharacter;
 
 		void main()
 		{
-			vec2 pixelCenterOffset = vec2(0.5, 0.5);
 			vsCharacter = characterIndex;
-			gl_Position.xy = 2.0f * (lowerLeftCorner + 0.5f) / viewportSizePx - 1.0f;
+			gl_Position.xy = 2.0f * topLeft / viewportSizePx - 1.0f;
 			gl_Position.z = 0.0;
 			gl_Position.w = 1.0;
 		}
@@ -174,17 +189,17 @@ inline bool createTextRenderingProgram(GLsizei maxLogLength, GLchar* infoLog, GL
 
 		void main()
 		{
-			vec2 lowerLeftNdc = gl_in[0].gl_Position.xy;
+			vec2 topLeftNdc = gl_in[0].gl_Position.xy;
 			vec2 characterSizeNdc = 2.0 * characterSizePx / viewportSizePx;
 
 			gsCharacter = vsCharacter[0];
 			gl_Position.z = 0.0;
 			gl_Position.w = 1.0;
 
-			float minX = lowerLeftNdc.x;
+			float minX = topLeftNdc.x;
 			float maxX = minX + characterSizeNdc.x;
-			float minY = lowerLeftNdc.y;
-			float maxY = minY + characterSizeNdc.y;
+			float maxY = topLeftNdc.y;
+			float minY = maxY - characterSizeNdc.y;
 
 			// upper-left corner
 			gl_Position.xy = vec2(minX, maxY);
@@ -222,7 +237,8 @@ inline bool createTextRenderingProgram(GLsizei maxLogLength, GLchar* infoLog, GL
 
 		void main()
 		{
-			color = texture(characterSampler, vec3(texCoord, gsCharacter));
+			float alpha = texture(characterSampler, vec3(texCoord, gsCharacter)).r;
+			color = vec4(1.0, 1.0, 1.0, alpha);
 		}
 	)";
 
@@ -271,6 +287,58 @@ resultSuccess:
 	return success;
 }
 
+inline bool readFontFile(ApplicationState& appState, const char *fileName)
+{
+	auto fontFile = fopen(fileName, "rb");
+	if (!fontFile)
+	{
+		perror("ERROR: unable to open font file");
+		return false;
+	}
+
+	bool result = true;
+
+	fread(&appState.font, sizeof(appState.font), 1, fontFile);
+	auto bitmapSize = appState.font.bitmapWidth * appState.font.bitmapHeight;
+	auto bitmapStorageSize = bitmapSize * 256;
+//TODO consider using a fixed size buffer on the stack and uploading the texture in chunks
+	auto bitmapStorage = (u8*) malloc(bitmapStorageSize);
+	if (bitmapStorage == nullptr)
+	{
+		puts("Not enough memory to read font file");
+		goto cleanup1;
+	}
+	fread(bitmapStorage, 1, bitmapStorageSize, fontFile);
+
+	if (ferror(fontFile))
+	{
+		perror("ERROR: failed to read font file");
+		goto cleanup2;
+	}
+
+	//NOTE glMapBuffer with GL_PIXEL_UNPACK_BUFFER can be used to updload textures. It probably
+	// will not have any advantage in this situtation, however.
+	glBindTexture(GL_TEXTURE_2D_ARRAY, appState.textRenderConfig.texture);
+	glTexStorage3D(GL_TEXTURE_2D_ARRAY, 1, GL_RGBA8, appState.font.bitmapWidth, appState.font.bitmapHeight, 256);
+	glTexSubImage3D(
+		GL_TEXTURE_2D_ARRAY,
+		0,
+		0, 0, 0,
+		appState.font.bitmapWidth, appState.font.bitmapHeight, 256,
+		GL_RED,
+		GL_UNSIGNED_BYTE,
+		bitmapStorage);
+
+cleanup2:
+	free(bitmapStorage);
+cleanup1:
+	if (fclose(fontFile) != 0)
+	{
+		perror("WARNING: failed to close output file");
+	}
+	return result;
+}
+
 void destroyApplication(ApplicationState& appState)
 {
 	glDeleteProgram(appState.simpleRenderConfig.program);
@@ -285,9 +353,6 @@ void destroyApplication(ApplicationState& appState)
 
 bool initApplication(ApplicationState& appState)
 {
-	appState.charWidth = 50;
-	appState.charHeight = 100;
-
 	// cornflower blue
 	glClearColor(0.3921568627451f, 0.5843137254902f, 0.9294117647059f, 1.0f);
 	glPointSize(10.0f);
@@ -313,7 +378,7 @@ bool initApplication(ApplicationState& appState)
 	glGenBuffers(1, &appState.textRenderConfig.charDataBuffer);
 	glBindBuffer(GL_ARRAY_BUFFER, appState.textRenderConfig.charDataBuffer);
 
-	appState.textRenderConfig.attribLowerLeftCorner = 0;
+	appState.textRenderConfig.attribLowerLeft = 0;
 	appState.textRenderConfig.attribCharacterIndex = 1;
 	glGenVertexArrays(1, &appState.textRenderConfig.vao);
 	glBindVertexArray(appState.textRenderConfig.vao);
@@ -321,7 +386,7 @@ bool initApplication(ApplicationState& appState)
 	auto sizeAttrib1 = sizeof(GLuint);
 	auto stride = (GLsizei) (sizeAttrib0 + sizeAttrib1);
 	glVertexAttribIPointer(
-		appState.textRenderConfig.attribLowerLeftCorner,
+		appState.textRenderConfig.attribLowerLeft,
 		2,
 		GL_UNSIGNED_INT,
 		stride,
@@ -332,7 +397,7 @@ bool initApplication(ApplicationState& appState)
 		GL_UNSIGNED_INT,
 		stride,
 		(GLvoid*) sizeAttrib0);
-	glEnableVertexAttribArray(appState.textRenderConfig.attribLowerLeftCorner);
+	glEnableVertexAttribArray(appState.textRenderConfig.attribLowerLeft);
 	glEnableVertexAttribArray(appState.textRenderConfig.attribCharacterIndex);
 
 	appState.textRenderConfig.program = glCreateProgram();
@@ -354,40 +419,12 @@ bool initApplication(ApplicationState& appState)
 	appState.textRenderConfig.unifCharacterSampler = glGetUniformLocation(
 		appState.textRenderConfig.program, "characterSampler");
 
-	//NOTE glMapBuffer with GL_PIXEL_UNPACK_BUFFER can be used to updload textures. It probably
-	// will not have any advantage in this situtation, however.
-	unsigned numberChars = 256;
-	unsigned imageSize = 4 * appState.charWidth * appState.charHeight;
-	unsigned imageArraySize = imageSize * numberChars;
-	auto textureMemory = (unsigned char*) malloc(imageArraySize);
-	auto pCharacterTexture = textureMemory;
-	for (unsigned index = 0; index < numberChars; ++index)
+//TODO replace hard-coded file here
+	auto fontFileName = "arial.font";
+	if (!readFontFile(appState, fontFileName))
 	{
-		char brightness = (char) index;
-		for (unsigned row = 0; row < appState.charHeight; ++row)
-		{
-			for (unsigned col = 0; col < appState.charWidth; ++col)
-			{
-				pCharacterTexture[0] = brightness;
-				pCharacterTexture[1] = brightness;
-				pCharacterTexture[2] = brightness;
-				pCharacterTexture[3] = 255;
-				pCharacterTexture += 4;
-			}
-		}
+		goto resultFail;
 	}
-
-	glBindTexture(GL_TEXTURE_2D_ARRAY, appState.textRenderConfig.texture);
-	glTexStorage3D(GL_TEXTURE_2D_ARRAY, 1, GL_RGBA8, appState.charWidth, appState.charHeight, numberChars);
-	glTexSubImage3D(
-		GL_TEXTURE_2D_ARRAY,
-		0,
-		0, 0, 0,
-		appState.charWidth, appState.charHeight, numberChars,
-		GL_RGBA,
-		GL_UNSIGNED_BYTE,
-		textureMemory);
-	free(textureMemory);
 
 	return true;
 
@@ -412,17 +449,22 @@ static void drawText(ApplicationState& appState)
 	glBufferData(GL_ARRAY_BUFFER, charDataSize, 0, GL_STREAM_DRAW);
 	auto pCharData = (GLuint*) glMapBuffer(GL_ARRAY_BUFFER, GL_WRITE_ONLY);
 	auto pText = textToRender;
-	GLuint charX = 50;
+	GLuint charX = 5;
+	GLuint baselineY = 5;
 	while (*pText != '\0')
 	{
-		pCharData[0] = charX;
-		pCharData[1] = 50;
-		pCharData[2] = *pText;
+		auto c = *pText;
+		auto glyphMetrics = appState.font.glyphMetrics[c];
 
-		charX += appState.charWidth;
+		pCharData[0] = charX + glyphMetrics.offsetLeft;
+		pCharData[1] = baselineY - glyphMetrics.offsetTop;
+		pCharData[2] = c;
+
+		charX += glyphMetrics.advanceX;
 		++pText;
 		pCharData += 3;
 	}
+
 	if (glUnmapBuffer(GL_ARRAY_BUFFER) == GL_FALSE)
 	{
 		// Under rare circumstances, glUnmapBuffer will return false, indicating
@@ -443,8 +485,8 @@ static void drawText(ApplicationState& appState)
 		(GLfloat) appState.windowHeight);
 	glUniform2f(
 		appState.textRenderConfig.unifCharacterSizePx,
-		(float) appState.charWidth,
-		(float) appState.charHeight);
+		(float) appState.font.bitmapWidth,
+		(float) appState.font.bitmapHeight);
 
 	glActiveTexture(GL_TEXTURE0 + appState.textRenderConfig.textureUnit);
 	glBindTexture(GL_TEXTURE_2D_ARRAY, appState.textRenderConfig.texture);
@@ -455,9 +497,12 @@ static void drawText(ApplicationState& appState)
 		appState.textRenderConfig.unifCharacterSampler,
 		appState.textRenderConfig.textureUnit);
 
+	glEnable(GL_BLEND);
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
 	glDrawArrays(GL_POINTS, 0, (GLsizei) numCharsToRender);
 
-//TODO enable blending, set the right blend mode
+	glDisable(GL_BLEND);
 }
 
 void updateApplication(ApplicationState& appState)
