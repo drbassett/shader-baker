@@ -442,15 +442,16 @@ void resizeApplication(ApplicationState& appState, int width, int height)
 
 static void drawText(ApplicationState& appState)
 {
-	const char *textToRender = "Hello, world!";
+	const char *textToRender = "Hello, world!\nHello, world!";
 	size_t numCharsToRender = strlen(textToRender);
 	auto charDataSize = numCharsToRender * sizeof(GLuint) * 3;
 	glBindBuffer(GL_ARRAY_BUFFER, appState.textRenderConfig.charDataBuffer);
 	glBufferData(GL_ARRAY_BUFFER, charDataSize, 0, GL_STREAM_DRAW);
 	auto pCharData = (GLuint*) glMapBuffer(GL_ARRAY_BUFFER, GL_WRITE_ONLY);
 	auto pText = textToRender;
-	GLuint charX = 5;
-	GLuint baselineY = 5;
+	GLuint leftEdge = 5;
+	GLuint charX = leftEdge;
+	GLuint baselineY = 100;
 	while (*pText != '\0')
 	{
 		auto c = *pText;
@@ -458,9 +459,17 @@ static void drawText(ApplicationState& appState)
 
 		pCharData[0] = charX + glyphMetrics.offsetLeft;
 		pCharData[1] = baselineY - glyphMetrics.offsetTop;
-		pCharData[2] = c;
+		if (*pText == '\n')
+		{
+			pCharData[2] = ' ';
+			charX = leftEdge;
+			baselineY -= appState.font.advanceY;
+		} else
+		{
+			pCharData[2] = c;
+			charX += glyphMetrics.advanceX;
+		}
 
-		charX += glyphMetrics.advanceX;
 		++pText;
 		pCharData += 3;
 	}
