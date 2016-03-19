@@ -5,6 +5,11 @@
 
 #define arrayLength(array) sizeof(array) / sizeof(array[0])
 
+struct StringSlice
+{
+	char *begin, *end;
+};
+
 struct GlyphMetrics
 {
 	i32 offsetTop, offsetLeft;
@@ -45,6 +50,11 @@ struct ApplicationState
 	TextRenderConfig textRenderConfig;
 	unsigned windowWidth, windowHeight;
 };
+
+inline size_t stringSliceLength(StringSlice str)
+{
+	return str.end - str.begin;
+}
 
 static bool compileShaderChecked(
 	GLuint shader,
@@ -442,36 +452,51 @@ void resizeApplication(ApplicationState& appState, int width, int height)
 
 static void drawText(ApplicationState& appState)
 {
-	const char *textToRender = "Hello, world!\nHello, world!";
-	size_t numCharsToRender = strlen(textToRender);
-	auto charDataSize = numCharsToRender * sizeof(GLuint) * 3;
+	char *line1 = "Hello, world (line 1)!";
+	char *line2 = "Hello, world (line 2)!";
+	char *line1End = line1 + strlen(line1);
+	char *line2End = line2 + strlen(line2);
+
+	StringSlice linesOfText[] = {
+		StringSlice{line1, line1End},
+		StringSlice{line2, line2End}};
+	size_t lineCount = arrayLength(linesOfText);
+
+	size_t charCount = 0;
+	for (int i = 0; i < lineCount; ++i)
+	{
+		auto line = linesOfText[i];
+		charCount += line.end - line.begin;
+	}
+
+	auto charDataSize = charCount * sizeof(GLuint) * 3;
 	glBindBuffer(GL_ARRAY_BUFFER, appState.textRenderConfig.charDataBuffer);
 	glBufferData(GL_ARRAY_BUFFER, charDataSize, 0, GL_STREAM_DRAW);
 	auto pCharData = (GLuint*) glMapBuffer(GL_ARRAY_BUFFER, GL_WRITE_ONLY);
-	auto pText = textToRender;
 	GLuint leftEdge = 5;
 	GLuint charX = leftEdge;
 	GLuint baselineY = 100;
-	while (*pText != '\0')
+	for (int i = 0; i < lineCount; ++i)
 	{
-		auto c = *pText;
-		auto glyphMetrics = appState.font.glyphMetrics[c];
+		auto line = linesOfText[i];
+		auto cPtr = line.begin;
 
-		pCharData[0] = charX + glyphMetrics.offsetLeft;
-		pCharData[1] = baselineY - glyphMetrics.offsetTop;
-		if (*pText == '\n')
+		while (cPtr != line.end)
 		{
-			pCharData[2] = ' ';
-			charX = leftEdge;
-			baselineY -= appState.font.advanceY;
-		} else
-		{
+			auto c = *cPtr;
+			auto glyphMetrics = appState.font.glyphMetrics[c];
+
+			pCharData[0] = charX + glyphMetrics.offsetLeft;
+			pCharData[1] = baselineY - glyphMetrics.offsetTop;
 			pCharData[2] = c;
 			charX += glyphMetrics.advanceX;
+
+			++cPtr;
+			pCharData += 3;
 		}
 
-		++pText;
-		pCharData += 3;
+		charX = leftEdge;
+		baselineY -= appState.font.advanceY;
 	}
 
 	if (glUnmapBuffer(GL_ARRAY_BUFFER) == GL_FALSE)
@@ -509,7 +534,7 @@ static void drawText(ApplicationState& appState)
 	glEnable(GL_BLEND);
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-	glDrawArrays(GL_POINTS, 0, (GLsizei) numCharsToRender);
+	glDrawArrays(GL_POINTS, 0, (GLsizei) charCount);
 
 	glDisable(GL_BLEND);
 }
