@@ -10,6 +10,12 @@ struct StringSlice
 	char *begin, *end;
 };
 
+struct TextLine
+{
+	i32 leftEdge, baseline;
+	StringSlice text;
+};
+
 struct GlyphMetrics
 {
 	i32 offsetTop, offsetLeft;
@@ -46,9 +52,16 @@ struct TextRenderConfig
 struct ApplicationState
 {
 	AsciiFont font;
+
 	SimpleRenderConfig simpleRenderConfig;
 	TextRenderConfig textRenderConfig;
+
 	unsigned windowWidth, windowHeight;
+
+	TextLine DEBUG_textLines[2];
+
+	size_t textLineCount;
+	TextLine* textLines;
 };
 
 inline size_t stringSliceLength(StringSlice str)
@@ -436,6 +449,31 @@ bool initApplication(ApplicationState& appState)
 		goto resultFail;
 	}
 
+	{
+		char *line1Str = "Hello, world (line 1)!";
+		char *line2Str = "Hello, world (line 2)!";
+		char *line1End = line1Str + strlen(line1Str);
+		char *line2End = line2Str + strlen(line2Str);
+
+		i32 leftEdge = 5;
+		i32 bottomBaseline = 10;
+
+		appState.DEBUG_textLines[1] = {};
+		appState.DEBUG_textLines[1].text = StringSlice{line2Str, line2End};
+		appState.DEBUG_textLines[1].leftEdge = leftEdge;
+		appState.DEBUG_textLines[1].baseline = bottomBaseline;
+		bottomBaseline += appState.font.advanceY;
+
+		appState.DEBUG_textLines[0] = {};
+		appState.DEBUG_textLines[0].text = StringSlice{line1Str, line1End};
+		appState.DEBUG_textLines[0].leftEdge = leftEdge;
+		appState.DEBUG_textLines[0].baseline = bottomBaseline;
+		bottomBaseline += appState.font.advanceY;
+
+		appState.textLineCount = arrayLength(appState.DEBUG_textLines);
+		appState.textLines = appState.DEBUG_textLines;
+	}
+
 	return true;
 
 resultFail:
@@ -452,51 +490,38 @@ void resizeApplication(ApplicationState& appState, int width, int height)
 
 static void drawText(ApplicationState& appState)
 {
-	char *line1 = "Hello, world (line 1)!";
-	char *line2 = "Hello, world (line 2)!";
-	char *line1End = line1 + strlen(line1);
-	char *line2End = line2 + strlen(line2);
-
-	StringSlice linesOfText[] = {
-		StringSlice{line1, line1End},
-		StringSlice{line2, line2End}};
-	size_t lineCount = arrayLength(linesOfText);
+	auto textLines = appState.textLines;
+	auto lineCount = appState.textLineCount;
 
 	size_t charCount = 0;
 	for (int i = 0; i < lineCount; ++i)
 	{
-		auto line = linesOfText[i];
-		charCount += line.end - line.begin;
+		charCount += stringSliceLength(textLines[i].text);
 	}
 
-	auto charDataSize = charCount * sizeof(GLuint) * 3;
+	auto charDataBufferSize = charCount * sizeof(GLuint) * 3;
 	glBindBuffer(GL_ARRAY_BUFFER, appState.textRenderConfig.charDataBuffer);
-	glBufferData(GL_ARRAY_BUFFER, charDataSize, 0, GL_STREAM_DRAW);
+	glBufferData(GL_ARRAY_BUFFER, charDataBufferSize, 0, GL_STREAM_DRAW);
 	auto pCharData = (GLuint*) glMapBuffer(GL_ARRAY_BUFFER, GL_WRITE_ONLY);
-	GLuint leftEdge = 5;
-	GLuint charX = leftEdge;
-	GLuint baselineY = 100;
 	for (int i = 0; i < lineCount; ++i)
 	{
-		auto line = linesOfText[i];
-		auto cPtr = line.begin;
+		auto line = textLines[i];
+		auto cPtr = line.text.begin;
+		auto charX = line.leftEdge;
 
-		while (cPtr != line.end)
+		while (cPtr != line.text.end)
 		{
 			auto c = *cPtr;
 			auto glyphMetrics = appState.font.glyphMetrics[c];
 
 			pCharData[0] = charX + glyphMetrics.offsetLeft;
-			pCharData[1] = baselineY - glyphMetrics.offsetTop;
+			pCharData[1] = line.baseline - glyphMetrics.offsetTop;
 			pCharData[2] = c;
-			charX += glyphMetrics.advanceX;
 
+			charX += glyphMetrics.advanceX;
 			++cPtr;
 			pCharData += 3;
 		}
-
-		charX = leftEdge;
-		baselineY -= appState.font.advanceY;
 	}
 
 	if (glUnmapBuffer(GL_ARRAY_BUFFER) == GL_FALSE)
