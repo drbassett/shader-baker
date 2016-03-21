@@ -58,10 +58,11 @@ struct ApplicationState
 
 	unsigned windowWidth, windowHeight;
 
-	TextLine DEBUG_textLines[2];
-
 	size_t textLineCount;
 	TextLine* textLines;
+
+	char commandLine[256];
+	size_t commandLineLength, commandLineCapacity;
 };
 
 inline size_t stringSliceLength(StringSlice str)
@@ -449,30 +450,8 @@ bool initApplication(ApplicationState& appState)
 		goto resultFail;
 	}
 
-	{
-		char *line1Str = "Hello, world (line 1)!";
-		char *line2Str = "Hello, world (line 2)!";
-		char *line1End = line1Str + strlen(line1Str);
-		char *line2End = line2Str + strlen(line2Str);
-
-		i32 leftEdge = 5;
-		i32 bottomBaseline = 10;
-
-		appState.DEBUG_textLines[1] = {};
-		appState.DEBUG_textLines[1].text = StringSlice{line2Str, line2End};
-		appState.DEBUG_textLines[1].leftEdge = leftEdge;
-		appState.DEBUG_textLines[1].baseline = bottomBaseline;
-		bottomBaseline += appState.font.advanceY;
-
-		appState.DEBUG_textLines[0] = {};
-		appState.DEBUG_textLines[0].text = StringSlice{line1Str, line1End};
-		appState.DEBUG_textLines[0].leftEdge = leftEdge;
-		appState.DEBUG_textLines[0].baseline = bottomBaseline;
-		bottomBaseline += appState.font.advanceY;
-
-		appState.textLineCount = arrayLength(appState.DEBUG_textLines);
-		appState.textLines = appState.DEBUG_textLines;
-	}
+	appState.commandLineLength = 0;
+	appState.commandLineCapacity = arrayLength(appState.commandLine);
 
 	return true;
 
@@ -486,6 +465,53 @@ void resizeApplication(ApplicationState& appState, int width, int height)
 	appState.windowWidth = width;
 	appState.windowHeight = height;
 	glViewport(0, 0, width, height);
+}
+
+static bool operator==(StringSlice lhs, const char* rhs)
+{
+	auto pLhs = lhs.begin;
+	auto pRhs = rhs;
+	for (;;)
+	{
+		auto lhsEnd = pLhs == lhs.end;
+		auto rhsEnd = *pRhs == '\0';
+		if (rhsEnd)
+		{
+			return lhsEnd;
+		}
+
+		if (lhsEnd)
+		{
+			return false;
+		}
+
+		if (*pLhs != *pRhs)
+		{
+			return false;
+		}
+
+		++pLhs;
+		++pRhs;
+	}
+}
+
+void applicationProcessCommand(ApplicationState& appState)
+{
+	auto command = StringSlice{
+		appState.commandLine,
+		appState.commandLine + appState.commandLineLength};
+	appState.commandLineLength = 0;
+
+	if (command == "set-color")
+	{
+		glClearColor(0.2f, 0.15f, 0.15f, 1.0f);
+	} else if (command == "set-point-size")
+	{
+		glPointSize(15.0f);
+	} else
+	{
+//TODO handle unknown command
+	}
 }
 
 static void drawText(ApplicationState& appState)
@@ -566,6 +592,17 @@ static void drawText(ApplicationState& appState)
 
 void updateApplication(ApplicationState& appState)
 {
+	TextLine textLines[1];
+
+	textLines[0] = {};
+	textLines[0].leftEdge = 5;
+	textLines[0].baseline = 10;
+	textLines[0].text.begin = appState.commandLine;
+	textLines[0].text.end = appState.commandLine + appState.commandLineLength;
+
+	appState.textLineCount = arrayLength(textLines);
+	appState.textLines = textLines;
+
 	glClear(GL_COLOR_BUFFER_BIT);
 
 	{

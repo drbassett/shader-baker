@@ -241,6 +241,32 @@ LRESULT CALLBACK windowProc(
 {
 	switch (uMsg)
 	{
+	case WM_CHAR:
+	{
+		auto c = (char) wParam;
+		switch (c)
+		{
+		case '\b':
+		{
+			if (appState.commandLineLength > 0)
+			{
+				--appState.commandLineLength;
+			}
+		} break;
+		case '\r':
+		{
+			applicationProcessCommand(appState);
+		} break;
+		default:
+		{
+			if (appState.commandLineLength < appState.commandLineCapacity)
+			{
+				appState.commandLine[appState.commandLineLength] = c;
+				++appState.commandLineLength;
+			}
+		} break;
+		}
+	} break;
 	case WM_SIZE:
 	{
 		if (wParam == SIZE_RESTORED || wParam == SIZE_MAXIMIZED)
