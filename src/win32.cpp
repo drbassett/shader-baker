@@ -221,18 +221,25 @@ int CALLBACK WinMain(
 		FATAL("Failed to initialize application");
 	}
 
-	MSG message = {};
-	while (GetMessageA(&message, NULL, 0, 0))
+	for (;;)
 	{
-		TranslateMessage(&message);
-		DispatchMessageA(&message);
+		MSG message = {};
+		while (PeekMessageA(&message, NULL, 0, 0, PM_REMOVE))
+		{
+			if (message.message == WM_QUIT)
+			{
+				goto exit;
+			}
+			TranslateMessage(&message);
+			DispatchMessageA(&message);
+		}
 
 		updateApplication(appState);
 		SwapBuffers(dc);
 	}
 
+exit:
 	destroyApplication(appState);
-
 	return 0;
 }
 
