@@ -639,6 +639,11 @@ void updateApplication(ApplicationState& appState)
 	fillRectangle(commandInputArea, 0.1f, 0.05f, 0.05f, 1.0f);
 	glDisable(GL_SCISSOR_TEST);
 
+	glViewport(
+		previewArea.min.x,
+		previewArea.min.y,
+		rectWidth(previewArea),
+		rectHeight(previewArea));
 	glBindVertexArray(appState.simpleRenderConfig.vao);
 	glUseProgram(appState.simpleRenderConfig.program);
 	glDrawArrays(GL_POINTS, 0, 1);
