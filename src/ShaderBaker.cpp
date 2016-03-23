@@ -627,7 +627,7 @@ void updateApplication(ApplicationState& appState)
 	i32 commandInputAreaBottom = windowHeight - commandInputAreaHeight;
 
 	auto commandInputArea = RectI32{
-		Vec2I32{0, commandInputAreaBottom + 1},
+		Vec2I32{0, commandInputAreaBottom},
 		Vec2I32{windowWidth, windowHeight}};
 
 	auto previewArea = RectI32{
