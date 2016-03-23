@@ -4,6 +4,7 @@ glBindBuffer
 glBindSampler
 glBindVertexArray
 glBufferData
+glClearBufferfv
 glCompileShader
 glCreateProgram
 glCreateShader

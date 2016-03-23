@@ -65,6 +65,16 @@ struct ApplicationState
 	size_t commandLineLength, commandLineCapacity;
 };
 
+struct Vec2I32
+{
+	i32 x, y;
+};
+
+struct RectI32
+{
+	Vec2I32 min, max;
+};
+
 inline size_t stringSliceLength(StringSlice str)
 {
 	return str.end - str.begin;
@@ -377,8 +387,6 @@ void destroyApplication(ApplicationState& appState)
 
 bool initApplication(ApplicationState& appState)
 {
-	// cornflower blue
-	glClearColor(0.3921568627451f, 0.5843137254902f, 0.9294117647059f, 1.0f);
 	glPointSize(10.0f);
 
 	GLchar infoLog[1024];
@@ -590,26 +598,50 @@ static void drawText(ApplicationState& appState)
 	glDisable(GL_BLEND);
 }
 
+inline void fillRectangle(RectI32 const& rect, float r, float g, float b, float a)
+{
+	auto width = rect.max.x - rect.min.x;
+	auto height = rect.max.y - rect.min.y;
+	float color[4] = {r, g, b, a};
+	glScissor(rect.min.x, rect.min.y, width, height);
+	glClearBufferfv(GL_COLOR, 0, color);
+}
+
 void updateApplication(ApplicationState& appState)
 {
+	auto windowWidth = (i32) appState.windowWidth;
+	auto windowHeight = (i32) appState.windowHeight;
+
 	TextLine textLines[1];
 
 	textLines[0] = {};
 	textLines[0].leftEdge = 5;
-	textLines[0].baseline = 10;
+	textLines[0].baseline = windowHeight - 20;
 	textLines[0].text.begin = appState.commandLine;
 	textLines[0].text.end = appState.commandLine + appState.commandLineLength;
 
 	appState.textLineCount = arrayLength(textLines);
 	appState.textLines = textLines;
 
-	glClear(GL_COLOR_BUFFER_BIT);
+	i32 commandInputAreaHeight = 30;
+	i32 commandInputAreaBottom = windowHeight - commandInputAreaHeight;
 
-	{
-		glBindVertexArray(appState.simpleRenderConfig.vao);
-		glUseProgram(appState.simpleRenderConfig.program);
-		glDrawArrays(GL_POINTS, 0, 1);
-	}
+	auto commandInputArea = RectI32{
+		Vec2I32{0, commandInputAreaBottom + 1},
+		Vec2I32{windowWidth, windowHeight}};
+
+	auto previewArea = RectI32{
+		Vec2I32{0, 0},
+		Vec2I32{windowWidth, commandInputAreaBottom}};
+
+	glEnable(GL_SCISSOR_TEST);
+	fillRectangle(previewArea, 0.3921568627451f, 0.5843137254902f, 0.9294117647059f, 1.0f);
+	fillRectangle(commandInputArea, 0.1f, 0.05f, 0.05f, 1.0f);
+	glDisable(GL_SCISSOR_TEST);
+
+	glBindVertexArray(appState.simpleRenderConfig.vao);
+	glUseProgram(appState.simpleRenderConfig.program);
+	glDrawArrays(GL_POINTS, 0, 1);
 
 	drawText(appState);
 }
