@@ -176,6 +176,24 @@ static bool initOpenGl(HDC dc)
 	return true;
 }
 
+// Writes a 64 bit unsigned value to a C string. The string will
+// occupy exactly 19 characters in the output array, including
+// the null-terminating character.
+void toHexString(u64 value, char *str)
+{
+	str[0] = '0';
+	str[1] = 'x';
+	str += 2;
+	for (int i = 0; i < 16; ++i)
+	{
+		auto hexDigit = (char) (value >> 60);
+		*str = hexDigit + (hexDigit <= 9 ? '0' : ('a' - 9));
+		value <<= 4;
+		++str;
+	}
+	*str = '\0';
+}
+
 int CALLBACK WinMain(
 	HINSTANCE hInstance,
 	HINSTANCE hPrevInstance,
@@ -221,6 +239,12 @@ int CALLBACK WinMain(
 		FATAL("Failed to initialize application");
 	}
 
+	LARGE_INTEGER qpcFreq;
+	QueryPerformanceFrequency(&qpcFreq);
+
+	LARGE_INTEGER qpcStartTime;
+	QueryPerformanceCounter(&qpcStartTime);
+
 	for (;;)
 	{
 		MSG message = {};
@@ -234,6 +258,10 @@ int CALLBACK WinMain(
 			DispatchMessageA(&message);
 		}
 
+		LARGE_INTEGER qpcTime;
+		QueryPerformanceCounter(&qpcTime);
+		appState.currentTime = MicroSeconds{
+			(u64) (1000000 * (qpcTime.QuadPart - qpcStartTime.QuadPart) / qpcFreq.QuadPart)};
 		updateApplication(appState);
 		SwapBuffers(dc);
 	}

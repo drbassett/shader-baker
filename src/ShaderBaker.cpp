@@ -49,6 +49,11 @@ struct TextRenderConfig
 	GLint attribLowerLeft, attribCharacterIndex;
 };
 
+struct MicroSeconds
+{
+	u64 value;
+};
+
 struct ApplicationState
 {
 	AsciiFont font;
@@ -63,6 +68,8 @@ struct ApplicationState
 
 	char commandLine[256];
 	size_t commandLineLength, commandLineCapacity;
+
+	MicroSeconds currentTime;
 };
 
 struct Vec2I32
@@ -78,6 +85,16 @@ struct RectI32
 inline size_t stringSliceLength(StringSlice str)
 {
 	return str.end - str.begin;
+}
+
+inline i32 rectWidth(RectI32 const& rect)
+{
+	return rect.max.x - rect.min.x;
+}
+
+inline i32 rectHeight(RectI32 const& rect)
+{
+	return rect.max.y - rect.min.y;
 }
 
 static bool compileShaderChecked(
@@ -598,12 +615,9 @@ static void drawText(ApplicationState& appState)
 	glDisable(GL_BLEND);
 }
 
-inline void fillRectangle(RectI32 const& rect, float r, float g, float b, float a)
+inline void fillRectangle(RectI32 const& rect, float color[4])
 {
-	auto width = rect.max.x - rect.min.x;
-	auto height = rect.max.y - rect.min.y;
-	float color[4] = {r, g, b, a};
-	glScissor(rect.min.x, rect.min.y, width, height);
+	glScissor(rect.min.x, rect.min.y, rectWidth(rect), rectHeight(rect));
 	glClearBufferfv(GL_COLOR, 0, color);
 }
 
@@ -634,9 +648,18 @@ void updateApplication(ApplicationState& appState)
 		Vec2I32{0, 0},
 		Vec2I32{windowWidth, commandInputAreaBottom}};
 
+	float cornflowerBlue[4] = {0.3921568627451f, 0.5843137254902f, 0.9294117647059f, 1.0f};
+	float commandAreaColorDark[4] = {0.1f, 0.05f, 0.05f, 1.0f};
+	float commandAreaColorLight[4] = {0.2f, 0.1f, 0.1f, 1.0f};
+
+	u64 blinkPeriod = 2000000;
+	u64 halfBlinkPeriod = blinkPeriod >> 1;
+	bool useDarkCommandAreaColor = appState.currentTime.value % blinkPeriod < halfBlinkPeriod;
+	auto commandAreaColor = useDarkCommandAreaColor ? commandAreaColorDark : commandAreaColorLight;
+
 	glEnable(GL_SCISSOR_TEST);
-	fillRectangle(previewArea, 0.3921568627451f, 0.5843137254902f, 0.9294117647059f, 1.0f);
-	fillRectangle(commandInputArea, 0.1f, 0.05f, 0.05f, 1.0f);
+	fillRectangle(previewArea, cornflowerBlue);
+	fillRectangle(commandInputArea, commandAreaColor);
 	glDisable(GL_SCISSOR_TEST);
 
 	glViewport(
