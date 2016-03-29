@@ -93,17 +93,17 @@ inline void assert(bool condition)
 	}
 }
 
-inline size_t stringSliceLength(StringSlice str)
+static inline size_t stringSliceLength(StringSlice str)
 {
 	return str.end - str.begin;
 }
 
-inline i32 rectWidth(RectI32 const& rect)
+static inline i32 rectWidth(RectI32 const& rect)
 {
 	return rect.max.x - rect.min.x;
 }
 
-inline i32 rectHeight(RectI32 const& rect)
+static inline i32 rectHeight(RectI32 const& rect)
 {
 	return rect.max.y - rect.min.y;
 }
@@ -156,7 +156,7 @@ static bool linkProgramChecked(
 	return false;
 }
 
-inline bool createSimpleProgram(GLsizei maxLogLength, GLchar* infoLog, GLuint program)
+static inline bool createSimpleProgram(GLsizei maxLogLength, GLchar* infoLog, GLuint program)
 {
 	const char* vsSource = R"(
 		#version 330
@@ -214,7 +214,7 @@ resultSuccess:
 	return success;
 }
 
-inline bool createTextRenderingProgram(GLsizei maxLogLength, GLchar* infoLog, GLuint program)
+static inline bool createTextRenderingProgram(GLsizei maxLogLength, GLchar* infoLog, GLuint program)
 {
 	const char* vsSource = R"(
 		#version 330
@@ -349,7 +349,7 @@ resultSuccess:
 	return success;
 }
 
-inline bool readFontFile(ApplicationState& appState, const char *fileName)
+static inline bool readFontFile(ApplicationState& appState, const char *fileName)
 {
 	auto fontFile = fopen(fileName, "rb");
 	if (!fontFile)
@@ -600,7 +600,7 @@ static void drawText(ApplicationState& appState)
 	glDisable(GL_BLEND);
 }
 
-inline void fillRectangle(RectI32 const& rect, float color[4])
+static inline void fillRectangle(RectI32 const& rect, float color[4])
 {
 	glScissor(rect.min.x, rect.min.y, rectWidth(rect), rectHeight(rect));
 	glClearBufferfv(GL_COLOR, 0, color);
