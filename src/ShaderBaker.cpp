@@ -61,6 +61,9 @@ struct ApplicationState
 	SimpleRenderConfig simpleRenderConfig;
 	TextRenderConfig textRenderConfig;
 
+	char *keyBuffer;
+	size_t keyBufferLength;
+
 	unsigned windowWidth, windowHeight;
 
 	size_t textLineCount;
@@ -81,6 +84,14 @@ struct RectI32
 {
 	Vec2I32 min, max;
 };
+
+inline void assert(bool condition)
+{
+	if (!condition)
+	{
+		*((char*) nullptr);
+	}
+}
 
 inline size_t stringSliceLength(StringSlice str)
 {
@@ -485,13 +496,6 @@ resultFail:
 	return false;
 }
 
-void resizeApplication(ApplicationState& appState, int width, int height)
-{
-	appState.windowWidth = width;
-	appState.windowHeight = height;
-	glViewport(0, 0, width, height);
-}
-
 static bool operator==(StringSlice lhs, const char* rhs)
 {
 	auto pLhs = lhs.begin;
@@ -517,25 +521,6 @@ static bool operator==(StringSlice lhs, const char* rhs)
 
 		++pLhs;
 		++pRhs;
-	}
-}
-
-void applicationProcessCommand(ApplicationState& appState)
-{
-	auto command = StringSlice{
-		appState.commandLine,
-		appState.commandLine + appState.commandLineLength};
-	appState.commandLineLength = 0;
-
-	if (command == "set-color")
-	{
-		glClearColor(0.2f, 0.15f, 0.15f, 1.0f);
-	} else if (command == "set-point-size")
-	{
-		glPointSize(15.0f);
-	} else
-	{
-//TODO handle unknown command
 	}
 }
 
@@ -621,8 +606,65 @@ inline void fillRectangle(RectI32 const& rect, float color[4])
 	glClearBufferfv(GL_COLOR, 0, color);
 }
 
+static inline void processCommand(ApplicationState& appState)
+{
+	auto command = StringSlice{
+		appState.commandLine,
+		appState.commandLine + appState.commandLineLength};
+	appState.commandLineLength = 0;
+
+	if (command == "set-color")
+	{
+		glClearColor(0.2f, 0.15f, 0.15f, 1.0f);
+	} else if (command == "set-point-size")
+	{
+		glPointSize(15.0f);
+	} else
+	{
+//TODO handle unknown command
+	}
+}
+
+static inline void processKeyBuffer(ApplicationState& appState)
+{
+	auto pKey = appState.keyBuffer;
+	auto pEnd = appState.keyBuffer + appState.keyBufferLength;
+
+	while (pKey != pEnd)
+	{
+		auto key = *pKey;
+
+		switch (key)
+		{
+		case '\b':
+		{
+			if (appState.commandLineLength > 0)
+			{
+				--appState.commandLineLength;
+			}
+		} break;
+		case '\r':
+		{
+			processCommand(appState);
+		} break;
+		default:
+		{
+			if (appState.commandLineLength < appState.commandLineCapacity)
+			{
+				appState.commandLine[appState.commandLineLength] = key;
+				++appState.commandLineLength;
+			}
+		} break;
+		}
+
+		++pKey;
+	}
+}
+
 void updateApplication(ApplicationState& appState)
 {
+	processKeyBuffer(appState);
+
 	auto windowWidth = (i32) appState.windowWidth;
 	auto windowHeight = (i32) appState.windowHeight;
 
@@ -662,6 +704,9 @@ void updateApplication(ApplicationState& appState)
 	fillRectangle(commandInputArea, commandAreaColor);
 	glDisable(GL_SCISSOR_TEST);
 
+	glViewport(0, 0, windowWidth, windowHeight);
+	drawText(appState);
+
 	glViewport(
 		previewArea.min.x,
 		previewArea.min.y,
@@ -670,7 +715,5 @@ void updateApplication(ApplicationState& appState)
 	glBindVertexArray(appState.simpleRenderConfig.vao);
 	glUseProgram(appState.simpleRenderConfig.program);
 	glDrawArrays(GL_POINTS, 0, 1);
-
-	drawText(appState);
 }
 

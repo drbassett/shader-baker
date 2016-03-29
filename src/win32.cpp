@@ -12,6 +12,8 @@
 //TODO printf does not work with Win32 GUI out of the box. Need to do something with AttachConsole/AllocConsole to make it work.
 #define FATAL(message) printf(message); return 1;
 
+char keyBuffer[1024];
+
 ApplicationState appState = {};
 
 static LRESULT CALLBACK windowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
@@ -239,6 +241,8 @@ int CALLBACK WinMain(
 		FATAL("Failed to initialize application");
 	}
 
+	appState.keyBuffer = keyBuffer;
+
 	LARGE_INTEGER qpcFreq;
 	QueryPerformanceFrequency(&qpcFreq);
 
@@ -247,6 +251,8 @@ int CALLBACK WinMain(
 
 	for (;;)
 	{
+		appState.keyBufferLength = 0;
+
 		MSG message = {};
 		while (PeekMessageA(&message, NULL, 0, 0, PM_REMOVE))
 		{
@@ -278,29 +284,11 @@ LRESULT CALLBACK windowProc(
 	{
 	case WM_CHAR:
 	{
-		auto c = (char) wParam;
-		switch (c)
-		{
-		case '\b':
-		{
-			if (appState.commandLineLength > 0)
-			{
-				--appState.commandLineLength;
-			}
-		} break;
-		case '\r':
-		{
-			applicationProcessCommand(appState);
-		} break;
-		default:
-		{
-			if (appState.commandLineLength < appState.commandLineCapacity)
-			{
-				appState.commandLine[appState.commandLineLength] = c;
-				++appState.commandLineLength;
-			}
-		} break;
-		}
+//TODO handle key buffer overflow
+		assert(appState.keyBufferLength < arrayLength(keyBuffer));
+
+		keyBuffer[appState.keyBufferLength] = (char) wParam;
+		++appState.keyBufferLength;
 	} break;
 	case WM_SIZE:
 	{
@@ -308,7 +296,8 @@ LRESULT CALLBACK windowProc(
 		{
 			auto width = LOWORD(lParam);
 			auto height = HIWORD(lParam);
-			resizeApplication(appState, width, height);
+			appState.windowWidth = width;
+			appState.windowHeight = height;
 		}
 	} break;
 	case WM_DESTROY:
