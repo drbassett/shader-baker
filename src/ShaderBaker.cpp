@@ -49,6 +49,14 @@ struct TextRenderConfig
 	GLint attribLowerLeft, attribCharacterIndex;
 };
 
+struct InfoPanel
+{
+	StringSlice *linesBegin, *linesEnd;
+
+	StringSlice *visibleLinesBegin;
+	u32 visibleLineCount;
+};
+
 struct MicroSeconds
 {
 	u64 value;
@@ -65,9 +73,6 @@ struct ApplicationState
 	size_t keyBufferLength;
 
 	unsigned windowWidth, windowHeight;
-
-	size_t textLineCount;
-	TextLine* textLines;
 
 	char commandLine[256];
 	size_t commandLineLength, commandLineCapacity;
@@ -96,6 +101,12 @@ inline void assert(bool condition)
 static inline size_t stringSliceLength(StringSlice str)
 {
 	return str.end - str.begin;
+}
+
+static inline StringSlice stringSliceFromCString(char *cstr)
+{
+	char *end = cstr + strlen(cstr);
+	return StringSlice{cstr, end};
 }
 
 static inline i32 rectWidth(RectI32 const& rect)
@@ -524,13 +535,10 @@ static bool operator==(StringSlice lhs, const char* rhs)
 	}
 }
 
-static void drawText(ApplicationState& appState)
+static void drawText(ApplicationState& appState, TextLine *textLines, size_t textLineCount)
 {
-	auto textLines = appState.textLines;
-	auto lineCount = appState.textLineCount;
-
 	size_t charCount = 0;
-	for (int i = 0; i < lineCount; ++i)
+	for (int i = 0; i < textLineCount; ++i)
 	{
 		charCount += stringSliceLength(textLines[i].text);
 	}
@@ -538,8 +546,9 @@ static void drawText(ApplicationState& appState)
 	auto charDataBufferSize = charCount * sizeof(GLuint) * 3;
 	glBindBuffer(GL_ARRAY_BUFFER, appState.textRenderConfig.charDataBuffer);
 	glBufferData(GL_ARRAY_BUFFER, charDataBufferSize, 0, GL_STREAM_DRAW);
+//TODO if charCount is zero, glMapBuffer returns null and generates an error - investigate
 	auto pCharData = (GLuint*) glMapBuffer(GL_ARRAY_BUFFER, GL_WRITE_ONLY);
-	for (int i = 0; i < lineCount; ++i)
+	for (int i = 0; i < textLineCount; ++i)
 	{
 		auto line = textLines[i];
 		auto cPtr = line.text.begin;
@@ -665,34 +674,95 @@ void updateApplication(ApplicationState& appState)
 {
 	processKeyBuffer(appState);
 
+	StringSlice DEBUG_infoPanelLines[] =
+	{
+		stringSliceFromCString("QWERTYUIOPASDFGHJKLZXCVBNM"),
+		stringSliceFromCString("qwertyuiopasdfghjklzxcvbnm"),
+		stringSliceFromCString("QWERTYUIOPASDFGHJKLZXCVBNM"),
+		stringSliceFromCString("QWERTYUIOPASDFGHJKLZXCVBNM"),
+		stringSliceFromCString("Line 5"),
+		stringSliceFromCString("Line 6"),
+		stringSliceFromCString("QWERTYUIOPASDFGHJKLZXCVBNM"),
+		stringSliceFromCString("qwertyuiopasdfghjklzxcvbnm"),
+		stringSliceFromCString("Line 9"),
+		stringSliceFromCString("Line 10"),
+		stringSliceFromCString("Line 11"),
+		stringSliceFromCString("Line 12"),
+		stringSliceFromCString("Line 13"),
+		stringSliceFromCString("Line 14"),
+		stringSliceFromCString("Line 15"),
+		stringSliceFromCString("Line 16"),
+	};
+
+//TODO retrieve these values from the font rasterizer
+	i32 fontMaxAscent = 11;
+	i32 fontMaxDescent = 3;
+	i32 fontMaxLineHeight = fontMaxAscent + fontMaxDescent;
+	i32 textLeftEdge = 5;
+
+	InfoPanel infoPanel = {};
+	infoPanel.linesBegin = DEBUG_infoPanelLines;
+	infoPanel.linesEnd = DEBUG_infoPanelLines + arrayLength(DEBUG_infoPanelLines);
+	infoPanel.visibleLinesBegin = DEBUG_infoPanelLines;
+	infoPanel.visibleLineCount = 8;
+
 	auto windowWidth = (i32) appState.windowWidth;
 	auto windowHeight = (i32) appState.windowHeight;
+
+	i32 commandInputAreaHeight = fontMaxLineHeight + 8;
+	i32 commandInputAreaTop = windowHeight;
+	i32 commandInputAreaBottom = commandInputAreaTop - commandInputAreaHeight;
+
+	i32 infoPanelHeight = (fontMaxLineHeight + 4) * infoPanel.visibleLineCount + 4;
+	i32 infoPanelTop = commandInputAreaBottom;
+	i32 infoPanelBottom = commandInputAreaBottom - infoPanelHeight;
+
+	i32 previewAreaTop = infoPanelBottom;
+	i32 previewAreaBottom = 0;
+
+	auto commandInputArea = RectI32{
+		Vec2I32{0, commandInputAreaBottom},
+		Vec2I32{windowWidth, commandInputAreaTop}};
+
+	auto infoPanelArea = RectI32{
+		Vec2I32{0, infoPanelBottom},
+		Vec2I32{windowWidth, infoPanelTop}};
+
+	auto previewArea = RectI32{
+		Vec2I32{0, previewAreaBottom},
+		Vec2I32{windowWidth, previewAreaTop}};
 
 	TextLine textLines[1];
 
 	textLines[0] = {};
-	textLines[0].leftEdge = 5;
-	textLines[0].baseline = windowHeight - 20;
+	textLines[0].leftEdge = textLeftEdge;
+	textLines[0].baseline = commandInputArea.max.y - fontMaxAscent - 4;
 	textLines[0].text.begin = appState.commandLine;
 	textLines[0].text.end = appState.commandLine + appState.commandLineLength;
 
-	appState.textLineCount = arrayLength(textLines);
-	appState.textLines = textLines;
+	const u32 infoPanelMaxLineCount = 30;
+	assert(infoPanel.visibleLineCount <= infoPanelMaxLineCount);
+	TextLine infoPanelTextLines[infoPanelMaxLineCount];
 
-	i32 commandInputAreaHeight = 30;
-	i32 commandInputAreaBottom = windowHeight - commandInputAreaHeight;
+	auto infoPanelLine = infoPanel.visibleLinesBegin;
+	auto infoPanelVisibleLinesEnd = infoPanel.visibleLinesBegin + infoPanel.visibleLineCount;
+	auto infoPanelTextLine = infoPanelTextLines;
+	auto baseline = infoPanelArea.max.y - fontMaxAscent - 4;
+	while (infoPanelLine != infoPanelVisibleLinesEnd)
+	{
+		infoPanelTextLine->leftEdge = textLeftEdge;
+		infoPanelTextLine->baseline = baseline;
+		infoPanelTextLine->text = *infoPanelLine;
 
-	auto commandInputArea = RectI32{
-		Vec2I32{0, commandInputAreaBottom},
-		Vec2I32{windowWidth, windowHeight}};
-
-	auto previewArea = RectI32{
-		Vec2I32{0, 0},
-		Vec2I32{windowWidth, commandInputAreaBottom}};
+		baseline -= fontMaxLineHeight + 4;
+		++infoPanelLine;
+		++infoPanelTextLine;
+	}
 
 	float cornflowerBlue[4] = {0.3921568627451f, 0.5843137254902f, 0.9294117647059f, 1.0f};
 	float commandAreaColorDark[4] = {0.1f, 0.05f, 0.05f, 1.0f};
 	float commandAreaColorLight[4] = {0.2f, 0.1f, 0.1f, 1.0f};
+	float infoPanelColor[4] = {0.0f, 0.1f, 0.0f, 1.0f};
 
 	u64 blinkPeriod = 2000000;
 	u64 halfBlinkPeriod = blinkPeriod >> 1;
@@ -700,12 +770,14 @@ void updateApplication(ApplicationState& appState)
 	auto commandAreaColor = useDarkCommandAreaColor ? commandAreaColorDark : commandAreaColorLight;
 
 	glEnable(GL_SCISSOR_TEST);
-	fillRectangle(previewArea, cornflowerBlue);
 	fillRectangle(commandInputArea, commandAreaColor);
+	fillRectangle(infoPanelArea, infoPanelColor);
+	fillRectangle(previewArea, cornflowerBlue);
 	glDisable(GL_SCISSOR_TEST);
 
 	glViewport(0, 0, windowWidth, windowHeight);
-	drawText(appState);
+	drawText(appState, textLines, arrayLength(textLines));
+	drawText(appState, infoPanelTextLines, infoPanel.visibleLineCount);
 
 	glViewport(
 		previewArea.min.x,
