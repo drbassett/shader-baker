@@ -12,6 +12,8 @@
 //TODO printf does not work with Win32 GUI out of the box. Need to do something with AttachConsole/AllocConsole to make it work.
 #define FATAL(message) printf(message); return 1;
 
+char keyBuffer[1024];
+
 ApplicationState appState = {};
 
 static LRESULT CALLBACK windowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
@@ -176,6 +178,24 @@ static bool initOpenGl(HDC dc)
 	return true;
 }
 
+// Writes a 64 bit unsigned value to a C string. The string will
+// occupy exactly 19 characters in the output array, including
+// the null-terminating character.
+void toHexString(u64 value, char *str)
+{
+	str[0] = '0';
+	str[1] = 'x';
+	str += 2;
+	for (int i = 0; i < 16; ++i)
+	{
+		auto hexDigit = (char) (value >> 60);
+		*str = hexDigit + (hexDigit <= 9 ? '0' : ('a' - 9));
+		value <<= 4;
+		++str;
+	}
+	*str = '\0';
+}
+
 int CALLBACK WinMain(
 	HINSTANCE hInstance,
 	HINSTANCE hPrevInstance,
@@ -221,18 +241,39 @@ int CALLBACK WinMain(
 		FATAL("Failed to initialize application");
 	}
 
-	MSG message = {};
-	while (GetMessageA(&message, NULL, 0, 0))
-	{
-		TranslateMessage(&message);
-		DispatchMessageA(&message);
+	appState.keyBuffer = keyBuffer;
 
+	LARGE_INTEGER qpcFreq;
+	QueryPerformanceFrequency(&qpcFreq);
+
+	LARGE_INTEGER qpcStartTime;
+	QueryPerformanceCounter(&qpcStartTime);
+
+	for (;;)
+	{
+		appState.keyBufferLength = 0;
+
+		MSG message = {};
+		while (PeekMessageA(&message, NULL, 0, 0, PM_REMOVE))
+		{
+			if (message.message == WM_QUIT)
+			{
+				goto exit;
+			}
+			TranslateMessage(&message);
+			DispatchMessageA(&message);
+		}
+
+		LARGE_INTEGER qpcTime;
+		QueryPerformanceCounter(&qpcTime);
+		appState.currentTime = MicroSeconds{
+			(u64) (1000000 * (qpcTime.QuadPart - qpcStartTime.QuadPart) / qpcFreq.QuadPart)};
 		updateApplication(appState);
 		SwapBuffers(dc);
 	}
 
+exit:
 	destroyApplication(appState);
-
 	return 0;
 }
 
@@ -241,13 +282,22 @@ LRESULT CALLBACK windowProc(
 {
 	switch (uMsg)
 	{
+	case WM_CHAR:
+	{
+//TODO handle key buffer overflow
+		assert(appState.keyBufferLength < arrayLength(keyBuffer));
+
+		keyBuffer[appState.keyBufferLength] = (char) wParam;
+		++appState.keyBufferLength;
+	} break;
 	case WM_SIZE:
 	{
 		if (wParam == SIZE_RESTORED || wParam == SIZE_MAXIMIZED)
 		{
 			auto width = LOWORD(lParam);
 			auto height = HIWORD(lParam);
-			resizeApplication(appState, width, height);
+			appState.windowWidth = width;
+			appState.windowHeight = height;
 		}
 	} break;
 	case WM_DESTROY:

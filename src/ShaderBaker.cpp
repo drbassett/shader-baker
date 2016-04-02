@@ -49,6 +49,11 @@ struct TextRenderConfig
 	GLint attribLowerLeft, attribCharacterIndex;
 };
 
+struct MicroSeconds
+{
+	u64 value;
+};
+
 struct ApplicationState
 {
 	AsciiFont font;
@@ -56,17 +61,51 @@ struct ApplicationState
 	SimpleRenderConfig simpleRenderConfig;
 	TextRenderConfig textRenderConfig;
 
-	unsigned windowWidth, windowHeight;
+	char *keyBuffer;
+	size_t keyBufferLength;
 
-	TextLine DEBUG_textLines[2];
+	unsigned windowWidth, windowHeight;
 
 	size_t textLineCount;
 	TextLine* textLines;
+
+	char commandLine[256];
+	size_t commandLineLength, commandLineCapacity;
+
+	MicroSeconds currentTime;
 };
 
-inline size_t stringSliceLength(StringSlice str)
+struct Vec2I32
+{
+	i32 x, y;
+};
+
+struct RectI32
+{
+	Vec2I32 min, max;
+};
+
+inline void assert(bool condition)
+{
+	if (!condition)
+	{
+		*((char*) nullptr);
+	}
+}
+
+static inline size_t stringSliceLength(StringSlice str)
 {
 	return str.end - str.begin;
+}
+
+static inline i32 rectWidth(RectI32 const& rect)
+{
+	return rect.max.x - rect.min.x;
+}
+
+static inline i32 rectHeight(RectI32 const& rect)
+{
+	return rect.max.y - rect.min.y;
 }
 
 static bool compileShaderChecked(
@@ -117,7 +156,7 @@ static bool linkProgramChecked(
 	return false;
 }
 
-inline bool createSimpleProgram(GLsizei maxLogLength, GLchar* infoLog, GLuint program)
+static inline bool createSimpleProgram(GLsizei maxLogLength, GLchar* infoLog, GLuint program)
 {
 	const char* vsSource = R"(
 		#version 330
@@ -175,7 +214,7 @@ resultSuccess:
 	return success;
 }
 
-inline bool createTextRenderingProgram(GLsizei maxLogLength, GLchar* infoLog, GLuint program)
+static inline bool createTextRenderingProgram(GLsizei maxLogLength, GLchar* infoLog, GLuint program)
 {
 	const char* vsSource = R"(
 		#version 330
@@ -310,7 +349,7 @@ resultSuccess:
 	return success;
 }
 
-inline bool readFontFile(ApplicationState& appState, const char *fileName)
+static inline bool readFontFile(ApplicationState& appState, const char *fileName)
 {
 	auto fontFile = fopen(fileName, "rb");
 	if (!fontFile)
@@ -376,8 +415,6 @@ void destroyApplication(ApplicationState& appState)
 
 bool initApplication(ApplicationState& appState)
 {
-	// cornflower blue
-	glClearColor(0.3921568627451f, 0.5843137254902f, 0.9294117647059f, 1.0f);
 	glPointSize(10.0f);
 
 	GLchar infoLog[1024];
@@ -449,30 +486,8 @@ bool initApplication(ApplicationState& appState)
 		goto resultFail;
 	}
 
-	{
-		char *line1Str = "Hello, world (line 1)!";
-		char *line2Str = "Hello, world (line 2)!";
-		char *line1End = line1Str + strlen(line1Str);
-		char *line2End = line2Str + strlen(line2Str);
-
-		i32 leftEdge = 5;
-		i32 bottomBaseline = 10;
-
-		appState.DEBUG_textLines[1] = {};
-		appState.DEBUG_textLines[1].text = StringSlice{line2Str, line2End};
-		appState.DEBUG_textLines[1].leftEdge = leftEdge;
-		appState.DEBUG_textLines[1].baseline = bottomBaseline;
-		bottomBaseline += appState.font.advanceY;
-
-		appState.DEBUG_textLines[0] = {};
-		appState.DEBUG_textLines[0].text = StringSlice{line1Str, line1End};
-		appState.DEBUG_textLines[0].leftEdge = leftEdge;
-		appState.DEBUG_textLines[0].baseline = bottomBaseline;
-		bottomBaseline += appState.font.advanceY;
-
-		appState.textLineCount = arrayLength(appState.DEBUG_textLines);
-		appState.textLines = appState.DEBUG_textLines;
-	}
+	appState.commandLineLength = 0;
+	appState.commandLineCapacity = arrayLength(appState.commandLine);
 
 	return true;
 
@@ -481,11 +496,32 @@ resultFail:
 	return false;
 }
 
-void resizeApplication(ApplicationState& appState, int width, int height)
+static bool operator==(StringSlice lhs, const char* rhs)
 {
-	appState.windowWidth = width;
-	appState.windowHeight = height;
-	glViewport(0, 0, width, height);
+	auto pLhs = lhs.begin;
+	auto pRhs = rhs;
+	for (;;)
+	{
+		auto lhsEnd = pLhs == lhs.end;
+		auto rhsEnd = *pRhs == '\0';
+		if (rhsEnd)
+		{
+			return lhsEnd;
+		}
+
+		if (lhsEnd)
+		{
+			return false;
+		}
+
+		if (*pLhs != *pRhs)
+		{
+			return false;
+		}
+
+		++pLhs;
+		++pRhs;
+	}
 }
 
 static void drawText(ApplicationState& appState)
@@ -564,16 +600,120 @@ static void drawText(ApplicationState& appState)
 	glDisable(GL_BLEND);
 }
 
+static inline void fillRectangle(RectI32 const& rect, float color[4])
+{
+	glScissor(rect.min.x, rect.min.y, rectWidth(rect), rectHeight(rect));
+	glClearBufferfv(GL_COLOR, 0, color);
+}
+
+static inline void processCommand(ApplicationState& appState)
+{
+	auto command = StringSlice{
+		appState.commandLine,
+		appState.commandLine + appState.commandLineLength};
+	appState.commandLineLength = 0;
+
+	if (command == "set-color")
+	{
+		glClearColor(0.2f, 0.15f, 0.15f, 1.0f);
+	} else if (command == "set-point-size")
+	{
+		glPointSize(15.0f);
+	} else
+	{
+//TODO handle unknown command
+	}
+}
+
+static inline void processKeyBuffer(ApplicationState& appState)
+{
+	auto pKey = appState.keyBuffer;
+	auto pEnd = appState.keyBuffer + appState.keyBufferLength;
+
+	while (pKey != pEnd)
+	{
+		auto key = *pKey;
+
+		switch (key)
+		{
+		case '\b':
+		{
+			if (appState.commandLineLength > 0)
+			{
+				--appState.commandLineLength;
+			}
+		} break;
+		case '\r':
+		{
+			processCommand(appState);
+		} break;
+		default:
+		{
+			if (appState.commandLineLength < appState.commandLineCapacity)
+			{
+				appState.commandLine[appState.commandLineLength] = key;
+				++appState.commandLineLength;
+			}
+		} break;
+		}
+
+		++pKey;
+	}
+}
+
 void updateApplication(ApplicationState& appState)
 {
-	glClear(GL_COLOR_BUFFER_BIT);
+	processKeyBuffer(appState);
 
-	{
-		glBindVertexArray(appState.simpleRenderConfig.vao);
-		glUseProgram(appState.simpleRenderConfig.program);
-		glDrawArrays(GL_POINTS, 0, 1);
-	}
+	auto windowWidth = (i32) appState.windowWidth;
+	auto windowHeight = (i32) appState.windowHeight;
 
+	TextLine textLines[1];
+
+	textLines[0] = {};
+	textLines[0].leftEdge = 5;
+	textLines[0].baseline = windowHeight - 20;
+	textLines[0].text.begin = appState.commandLine;
+	textLines[0].text.end = appState.commandLine + appState.commandLineLength;
+
+	appState.textLineCount = arrayLength(textLines);
+	appState.textLines = textLines;
+
+	i32 commandInputAreaHeight = 30;
+	i32 commandInputAreaBottom = windowHeight - commandInputAreaHeight;
+
+	auto commandInputArea = RectI32{
+		Vec2I32{0, commandInputAreaBottom},
+		Vec2I32{windowWidth, windowHeight}};
+
+	auto previewArea = RectI32{
+		Vec2I32{0, 0},
+		Vec2I32{windowWidth, commandInputAreaBottom}};
+
+	float cornflowerBlue[4] = {0.3921568627451f, 0.5843137254902f, 0.9294117647059f, 1.0f};
+	float commandAreaColorDark[4] = {0.1f, 0.05f, 0.05f, 1.0f};
+	float commandAreaColorLight[4] = {0.2f, 0.1f, 0.1f, 1.0f};
+
+	u64 blinkPeriod = 2000000;
+	u64 halfBlinkPeriod = blinkPeriod >> 1;
+	bool useDarkCommandAreaColor = appState.currentTime.value % blinkPeriod < halfBlinkPeriod;
+	auto commandAreaColor = useDarkCommandAreaColor ? commandAreaColorDark : commandAreaColorLight;
+
+	glEnable(GL_SCISSOR_TEST);
+	fillRectangle(previewArea, cornflowerBlue);
+	fillRectangle(commandInputArea, commandAreaColor);
+	glDisable(GL_SCISSOR_TEST);
+
+	glViewport(0, 0, windowWidth, windowHeight);
 	drawText(appState);
+
+	glViewport(
+		previewArea.min.x,
+		previewArea.min.y,
+		rectWidth(previewArea),
+		rectHeight(previewArea));
+	glBindVertexArray(appState.simpleRenderConfig.vao);
+	glUseProgram(appState.simpleRenderConfig.program);
+	glDrawArrays(GL_POINTS, 0, 1);
 }
 
