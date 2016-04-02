@@ -792,20 +792,43 @@ void updateApplication(ApplicationState& appState)
 	i32 commandInputAreaTop = windowHeight;
 	i32 commandInputAreaBottom = commandInputAreaTop - commandInputAreaHeight;
 
-	i32 infoPanelHeight = (fontMaxLineHeight + 4) * infoPanelVisibleLineCount + 4;
-	i32 infoPanelTop = commandInputAreaBottom;
-	i32 infoPanelBottom = commandInputAreaBottom - infoPanelHeight;
-
-	i32 previewAreaTop = infoPanelBottom;
-	i32 previewAreaBottom = 0;
-
 	auto commandInputArea = RectI32{
 		Vec2I32{0, commandInputAreaBottom},
 		Vec2I32{windowWidth, commandInputAreaTop}};
 
-	auto infoPanelArea = RectI32{
+	i32 infoPanelHeight = (fontMaxLineHeight + 4) * infoPanelVisibleLineCount + 4;
+	i32 infoPanelTop = commandInputAreaBottom;
+	i32 infoPanelBottom = commandInputAreaBottom - infoPanelHeight;
+
+	auto infoPanelScrollBarArea = RectI32{
 		Vec2I32{0, infoPanelBottom},
+		Vec2I32{20, infoPanelTop}};
+
+	i32 infoPanelScrollBarMarkerTop, infoPanelScrollBarMarkerBottom;
+	{
+		auto lineCount = (f32) (appState.infoPanel.linesEnd - appState.infoPanel.linesBegin);
+		auto linesBegin = appState.infoPanel.linesBegin;
+		auto visibleLinesBegin = appState.infoPanel.visibleLinesBegin;
+		auto visibleLinesEnd = appState.infoPanel.visibleLinesEnd;
+
+		auto scrollBarRatioMin = (f32) (visibleLinesBegin - linesBegin) / lineCount;
+		auto scrollBarRatioMax = (f32) (visibleLinesEnd - linesBegin) / lineCount;
+
+		auto scrollBarHeight = (f32) infoPanelHeight;
+		infoPanelScrollBarMarkerTop = infoPanelScrollBarArea.max.y - (i32) (scrollBarHeight * scrollBarRatioMax);
+		infoPanelScrollBarMarkerBottom = infoPanelScrollBarArea.max.y - (i32) (scrollBarHeight * scrollBarRatioMin);
+	}
+
+	auto infoPanelScrollBarMarkerArea = RectI32{
+		Vec2I32{infoPanelScrollBarArea.min.x, infoPanelScrollBarMarkerTop},
+		Vec2I32{infoPanelScrollBarArea.max.x, infoPanelScrollBarMarkerBottom}};
+
+	auto infoPanelArea = RectI32{
+		Vec2I32{infoPanelScrollBarArea.max.x, infoPanelBottom},
 		Vec2I32{windowWidth, infoPanelTop}};
+
+	i32 previewAreaTop = infoPanelBottom;
+	i32 previewAreaBottom = 0;
 
 	auto previewArea = RectI32{
 		Vec2I32{0, previewAreaBottom},
@@ -823,24 +846,30 @@ void updateApplication(ApplicationState& appState)
 	assert(infoPanelVisibleLineCount <= infoPanelMaxLineCount);
 	TextLine infoPanelTextLines[infoPanelMaxLineCount];
 
-	auto infoPanelLine = appState.infoPanel.visibleLinesBegin;
-	auto infoPanelTextLine = infoPanelTextLines;
-	auto baseline = infoPanelArea.max.y - fontMaxAscent - 4;
-	while (infoPanelLine != appState.infoPanel.visibleLinesEnd)
 	{
-		infoPanelTextLine->leftEdge = textLeftEdge;
-		infoPanelTextLine->baseline = baseline;
-		infoPanelTextLine->text = *infoPanelLine;
+		auto infoPanelTextLeftEdge = infoPanelArea.min.x + 5;
+		auto infoPanelLine = appState.infoPanel.visibleLinesBegin;
+		auto infoPanelTextLine = infoPanelTextLines;
+		auto baseline = infoPanelArea.max.y - fontMaxAscent - 4;
+		auto advanceY = fontMaxLineHeight + 4;
+		while (infoPanelLine != appState.infoPanel.visibleLinesEnd)
+		{
+			infoPanelTextLine->leftEdge = infoPanelTextLeftEdge;
+			infoPanelTextLine->baseline = baseline;
+			infoPanelTextLine->text = *infoPanelLine;
 
-		baseline -= fontMaxLineHeight + 4;
-		++infoPanelLine;
-		++infoPanelTextLine;
+			baseline -= advanceY;
+			++infoPanelLine;
+			++infoPanelTextLine;
+		}
 	}
 
-	float cornflowerBlue[4] = {0.3921568627451f, 0.5843137254902f, 0.9294117647059f, 1.0f};
-	float commandAreaColorDark[4] = {0.1f, 0.05f, 0.05f, 1.0f};
-	float commandAreaColorLight[4] = {0.2f, 0.1f, 0.1f, 1.0f};
+	float scrollBarFgColor[4] = {0.75f, 0.75, 0.0f, 1.0f};
+	float scrollBarBgColor[4] = {0.25f, 0.25f, 0.0f, 1.0f};
 	float infoPanelColor[4] = {0.0f, 0.1f, 0.0f, 1.0f};
+	float cornflowerBlue[4] = {0.3921568627451f, 0.5843137254902f, 0.9294117647059f, 1.0f};
+	float commandAreaColorLight[4] = {0.2f, 0.1f, 0.1f, 1.0f};
+	float commandAreaColorDark[4] = {0.1f, 0.05f, 0.05f, 1.0f};
 
 	u64 blinkPeriod = 2000000;
 	u64 halfBlinkPeriod = blinkPeriod >> 1;
@@ -849,13 +878,16 @@ void updateApplication(ApplicationState& appState)
 		&& appState.currentTime.value % blinkPeriod >= halfBlinkPeriod;
 	auto commandAreaColor = useLightCommandAreaColor ? commandAreaColorLight : commandAreaColorDark;
 
+	glViewport(0, 0, windowWidth, windowHeight);
+
 	glEnable(GL_SCISSOR_TEST);
 	fillRectangle(commandInputArea, commandAreaColor);
+	fillRectangle(infoPanelScrollBarArea, scrollBarBgColor);
+	fillRectangle(infoPanelScrollBarMarkerArea, scrollBarFgColor);
 	fillRectangle(infoPanelArea, infoPanelColor);
 	fillRectangle(previewArea, cornflowerBlue);
 	glDisable(GL_SCISSOR_TEST);
 
-	glViewport(0, 0, windowWidth, windowHeight);
 	drawText(appState, textLines, arrayLength(textLines));
 	drawText(appState, infoPanelTextLines, infoPanelVisibleLineCount);
 
