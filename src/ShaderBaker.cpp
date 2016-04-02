@@ -52,14 +52,19 @@ struct TextRenderConfig
 struct InfoPanel
 {
 	StringSlice *linesBegin, *linesEnd;
-
-	StringSlice *visibleLinesBegin;
-	u32 visibleLineCount;
+	StringSlice *visibleLinesBegin, *visibleLinesEnd;
 };
 
 struct MicroSeconds
 {
 	u64 value;
+};
+
+enum struct KeyInputReceiver
+{
+	GLOBAL,
+	COMMAND_INPUT,
+	INFO_PANEL,
 };
 
 struct ApplicationState
@@ -74,8 +79,12 @@ struct ApplicationState
 
 	unsigned windowWidth, windowHeight;
 
+	KeyInputReceiver keyInputReceiver;
+
 	char commandLine[256];
 	size_t commandLineLength, commandLineCapacity;
+
+	InfoPanel infoPanel;
 
 	MicroSeconds currentTime;
 };
@@ -89,6 +98,11 @@ struct RectI32
 {
 	Vec2I32 min, max;
 };
+
+inline void unreachable()
+{
+	*((char*) nullptr);
+}
 
 inline void assert(bool condition)
 {
@@ -424,6 +438,26 @@ void destroyApplication(ApplicationState& appState)
 	glDeleteProgram(appState.textRenderConfig.program);
 }
 
+StringSlice DEBUG_infoPanelLines[] =
+{
+	stringSliceFromCString("QWERTYUIOPASDFGHJKLZXCVBNM"),
+	stringSliceFromCString("qwertyuiopasdfghjklzxcvbnm"),
+	stringSliceFromCString("QWERTYUIOPASDFGHJKLZXCVBNM"),
+	stringSliceFromCString("QWERTYUIOPASDFGHJKLZXCVBNM"),
+	stringSliceFromCString("Line 5"),
+	stringSliceFromCString("Line 6"),
+	stringSliceFromCString("QWERTYUIOPASDFGHJKLZXCVBNM"),
+	stringSliceFromCString("qwertyuiopasdfghjklzxcvbnm"),
+	stringSliceFromCString("Line 9"),
+	stringSliceFromCString("Line 10"),
+	stringSliceFromCString("Line 11"),
+	stringSliceFromCString("Line 12"),
+	stringSliceFromCString("Line 13"),
+	stringSliceFromCString("Line 14"),
+	stringSliceFromCString("Line 15"),
+	stringSliceFromCString("Line 16"),
+};
+
 bool initApplication(ApplicationState& appState)
 {
 	glPointSize(10.0f);
@@ -497,8 +531,15 @@ bool initApplication(ApplicationState& appState)
 		goto resultFail;
 	}
 
+	appState.keyInputReceiver = KeyInputReceiver::GLOBAL;
+
 	appState.commandLineLength = 0;
 	appState.commandLineCapacity = arrayLength(appState.commandLine);
+
+	appState.infoPanel.linesBegin = DEBUG_infoPanelLines;
+	appState.infoPanel.linesEnd = DEBUG_infoPanelLines + arrayLength(DEBUG_infoPanelLines);
+	appState.infoPanel.visibleLinesBegin = DEBUG_infoPanelLines;
+	appState.infoPanel.visibleLinesEnd = DEBUG_infoPanelLines + 8;
 
 	return true;
 
@@ -621,16 +662,85 @@ static inline void processCommand(ApplicationState& appState)
 		appState.commandLine,
 		appState.commandLine + appState.commandLineLength};
 	appState.commandLineLength = 0;
+	appState.keyInputReceiver = KeyInputReceiver::GLOBAL;
 
-	if (command == "set-color")
+	if (command == "")
+	{
+//no-op command
+	} else if (command == "set-color")
 	{
 		glClearColor(0.2f, 0.15f, 0.15f, 1.0f);
 	} else if (command == "set-point-size")
 	{
 		glPointSize(15.0f);
+	} else if (command == "focus-info-panel")
+	{
+		appState.keyInputReceiver = KeyInputReceiver::INFO_PANEL;
 	} else
 	{
 //TODO handle unknown command
+	}
+}
+
+static inline void processKeyGlobal(ApplicationState& appState, char key)
+{
+	switch (key)
+	{
+	case ' ':
+		appState.keyInputReceiver = KeyInputReceiver::COMMAND_INPUT;
+		break;
+	}
+}
+
+static inline void processKeyCommandInput(ApplicationState& appState, char key)
+{
+	switch (key)
+	{
+	case '\b':
+	{
+		if (appState.commandLineLength > 0)
+		{
+			--appState.commandLineLength;
+		}
+	} break;
+	case '\r':
+	{
+		processCommand(appState);
+	} break;
+	default:
+	{
+		if (appState.commandLineLength < appState.commandLineCapacity)
+		{
+			appState.commandLine[appState.commandLineLength] = key;
+			++appState.commandLineLength;
+		}
+	} break;
+	}
+}
+
+static inline void processKeyInfoPanel(ApplicationState& appState, char key)
+{
+	switch (key)
+	{
+	case 'i':
+		// scroll up
+		if (appState.infoPanel.visibleLinesBegin != appState.infoPanel.linesBegin)
+		{
+			--appState.infoPanel.visibleLinesBegin;
+			--appState.infoPanel.visibleLinesEnd;
+		}
+		break;
+	case 'k':
+		// scroll down
+		if (appState.infoPanel.visibleLinesEnd != appState.infoPanel.linesEnd)
+		{
+			++appState.infoPanel.visibleLinesBegin;
+			++appState.infoPanel.visibleLinesEnd;
+		}
+		break;
+	case ' ':
+		appState.keyInputReceiver = KeyInputReceiver::COMMAND_INPUT;
+		break;
 	}
 }
 
@@ -643,27 +753,19 @@ static inline void processKeyBuffer(ApplicationState& appState)
 	{
 		auto key = *pKey;
 
-		switch (key)
+		switch (appState.keyInputReceiver)
 		{
-		case '\b':
-		{
-			if (appState.commandLineLength > 0)
-			{
-				--appState.commandLineLength;
-			}
-		} break;
-		case '\r':
-		{
-			processCommand(appState);
-		} break;
+		case KeyInputReceiver::GLOBAL:
+			processKeyGlobal(appState, key);
+			break;
+		case KeyInputReceiver::COMMAND_INPUT:
+			processKeyCommandInput(appState, key);
+			break;
+		case KeyInputReceiver::INFO_PANEL:
+			processKeyInfoPanel(appState, key);
+			break;
 		default:
-		{
-			if (appState.commandLineLength < appState.commandLineCapacity)
-			{
-				appState.commandLine[appState.commandLineLength] = key;
-				++appState.commandLineLength;
-			}
-		} break;
+			unreachable();
 		}
 
 		++pKey;
@@ -674,37 +776,14 @@ void updateApplication(ApplicationState& appState)
 {
 	processKeyBuffer(appState);
 
-	StringSlice DEBUG_infoPanelLines[] =
-	{
-		stringSliceFromCString("QWERTYUIOPASDFGHJKLZXCVBNM"),
-		stringSliceFromCString("qwertyuiopasdfghjklzxcvbnm"),
-		stringSliceFromCString("QWERTYUIOPASDFGHJKLZXCVBNM"),
-		stringSliceFromCString("QWERTYUIOPASDFGHJKLZXCVBNM"),
-		stringSliceFromCString("Line 5"),
-		stringSliceFromCString("Line 6"),
-		stringSliceFromCString("QWERTYUIOPASDFGHJKLZXCVBNM"),
-		stringSliceFromCString("qwertyuiopasdfghjklzxcvbnm"),
-		stringSliceFromCString("Line 9"),
-		stringSliceFromCString("Line 10"),
-		stringSliceFromCString("Line 11"),
-		stringSliceFromCString("Line 12"),
-		stringSliceFromCString("Line 13"),
-		stringSliceFromCString("Line 14"),
-		stringSliceFromCString("Line 15"),
-		stringSliceFromCString("Line 16"),
-	};
-
 //TODO retrieve these values from the font rasterizer
 	i32 fontMaxAscent = 11;
 	i32 fontMaxDescent = 3;
 	i32 fontMaxLineHeight = fontMaxAscent + fontMaxDescent;
 	i32 textLeftEdge = 5;
 
-	InfoPanel infoPanel = {};
-	infoPanel.linesBegin = DEBUG_infoPanelLines;
-	infoPanel.linesEnd = DEBUG_infoPanelLines + arrayLength(DEBUG_infoPanelLines);
-	infoPanel.visibleLinesBegin = DEBUG_infoPanelLines;
-	infoPanel.visibleLineCount = 8;
+	auto infoPanelVisibleLineCount = (u32)
+		(appState.infoPanel.visibleLinesEnd - appState.infoPanel.visibleLinesBegin);
 
 	auto windowWidth = (i32) appState.windowWidth;
 	auto windowHeight = (i32) appState.windowHeight;
@@ -713,7 +792,7 @@ void updateApplication(ApplicationState& appState)
 	i32 commandInputAreaTop = windowHeight;
 	i32 commandInputAreaBottom = commandInputAreaTop - commandInputAreaHeight;
 
-	i32 infoPanelHeight = (fontMaxLineHeight + 4) * infoPanel.visibleLineCount + 4;
+	i32 infoPanelHeight = (fontMaxLineHeight + 4) * infoPanelVisibleLineCount + 4;
 	i32 infoPanelTop = commandInputAreaBottom;
 	i32 infoPanelBottom = commandInputAreaBottom - infoPanelHeight;
 
@@ -740,15 +819,14 @@ void updateApplication(ApplicationState& appState)
 	textLines[0].text.begin = appState.commandLine;
 	textLines[0].text.end = appState.commandLine + appState.commandLineLength;
 
-	const u32 infoPanelMaxLineCount = 30;
-	assert(infoPanel.visibleLineCount <= infoPanelMaxLineCount);
+	const u32 infoPanelMaxLineCount = 32;
+	assert(infoPanelVisibleLineCount <= infoPanelMaxLineCount);
 	TextLine infoPanelTextLines[infoPanelMaxLineCount];
 
-	auto infoPanelLine = infoPanel.visibleLinesBegin;
-	auto infoPanelVisibleLinesEnd = infoPanel.visibleLinesBegin + infoPanel.visibleLineCount;
+	auto infoPanelLine = appState.infoPanel.visibleLinesBegin;
 	auto infoPanelTextLine = infoPanelTextLines;
 	auto baseline = infoPanelArea.max.y - fontMaxAscent - 4;
-	while (infoPanelLine != infoPanelVisibleLinesEnd)
+	while (infoPanelLine != appState.infoPanel.visibleLinesEnd)
 	{
 		infoPanelTextLine->leftEdge = textLeftEdge;
 		infoPanelTextLine->baseline = baseline;
@@ -766,8 +844,10 @@ void updateApplication(ApplicationState& appState)
 
 	u64 blinkPeriod = 2000000;
 	u64 halfBlinkPeriod = blinkPeriod >> 1;
-	bool useDarkCommandAreaColor = appState.currentTime.value % blinkPeriod < halfBlinkPeriod;
-	auto commandAreaColor = useDarkCommandAreaColor ? commandAreaColorDark : commandAreaColorLight;
+	bool useLightCommandAreaColor =
+		appState.keyInputReceiver == KeyInputReceiver::COMMAND_INPUT
+		&& appState.currentTime.value % blinkPeriod >= halfBlinkPeriod;
+	auto commandAreaColor = useLightCommandAreaColor ? commandAreaColorLight : commandAreaColorDark;
 
 	glEnable(GL_SCISSOR_TEST);
 	fillRectangle(commandInputArea, commandAreaColor);
@@ -777,7 +857,7 @@ void updateApplication(ApplicationState& appState)
 
 	glViewport(0, 0, windowWidth, windowHeight);
 	drawText(appState, textLines, arrayLength(textLines));
-	drawText(appState, infoPanelTextLines, infoPanel.visibleLineCount);
+	drawText(appState, infoPanelTextLines, infoPanelVisibleLineCount);
 
 	glViewport(
 		previewArea.min.x,
