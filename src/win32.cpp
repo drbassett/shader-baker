@@ -4,6 +4,7 @@
 
 #pragma warning(pop)
 
+#include "Types.h"
 #include "ShaderBaker.cpp"
 #include "../include/wglext.h"
 #include <cstdio>
@@ -242,7 +243,7 @@ LRESULT CALLBACK windowProc(
 	{
 	case WM_SIZE:
 	{
-		if (wParam == SIZE_RESTORED)
+		if (wParam == SIZE_RESTORED || wParam == SIZE_MAXIMIZED)
 		{
 			auto width = LOWORD(lParam);
 			auto height = HIWORD(lParam);
