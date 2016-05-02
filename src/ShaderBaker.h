@@ -74,6 +74,7 @@ struct ApplicationState
 
 	TextRenderConfig textRenderConfig;
 
+	bool loadUserRenderConfig;
 	FilePath userFragShaderPath, userVertShaderPath;
 	UserRenderConfig userRenderConfig;
 

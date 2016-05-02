@@ -1,6 +1,7 @@
 @echo off
 
 pushd build\win32 > nul
-shader-baker.exe
+set shadersDir=..\..\shaders
+shader-baker.exe %shadersDir%\user-shader.vert %shadersDir%\user-shader.frag
 popd
 

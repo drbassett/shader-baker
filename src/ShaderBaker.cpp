@@ -467,8 +467,7 @@ bool initApplication(ApplicationState& appState)
 
 	appState.textRenderConfig.program = glCreateProgram();
 
-	appState.userVertShaderPath = FilePath{stringSliceFromCString("user-shader.vert")};
-	appState.userFragShaderPath = FilePath{stringSliceFromCString("user-shader.frag")};
+	appState.loadUserRenderConfig = false;
 	initUserRenderConfig(maxLogLength, infoLog, appState.userRenderConfig);
 
 	if (!createTextRenderingProgram(maxLogLength, infoLog, appState.textRenderConfig.program))
@@ -662,7 +661,7 @@ static inline void processKeyBuffer(ApplicationState& appState)
 	}
 }
 
-void loadUserProgram(
+void loadUserRenderConfig(
 	MemoryStack& stack,
 	FilePath vertShaderPath,
 	FilePath fragShaderPath,
@@ -719,11 +718,14 @@ void loadUserProgram(
 void updateApplication(ApplicationState& appState)
 {
 	processKeyBuffer(appState);
-	loadUserProgram(
-		appState.scratchMemory,
-		appState.userVertShaderPath,
-		appState.userFragShaderPath,
-		appState.userRenderConfig);
+	if (appState.loadUserRenderConfig)
+	{
+		loadUserRenderConfig(
+			appState.scratchMemory,
+			appState.userVertShaderPath,
+			appState.userFragShaderPath,
+			appState.userRenderConfig);
+	}
 
 	auto windowWidth = (i32) appState.windowWidth;
 	auto windowHeight = (i32) appState.windowHeight;

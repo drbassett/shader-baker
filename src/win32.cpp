@@ -269,12 +269,64 @@ void toHexString(u64 value, char *str)
 	*str = '\0';
 }
 
+static bool isWhitespace(char c)
+{
+	switch (c)
+	{
+	case ' ':
+	case '\t':
+	case '\n':
+	case '\r':
+		return true;
+	}
+	return false;
+}
+
+static char* skipWhitespace(char *ptr)
+{
+	for (;;)
+	{
+		char c = *ptr;
+		if (c == 0 || !isWhitespace(c))
+		{
+			break;
+		}
+		++ptr;
+	}
+	return ptr;
+}
+
+static char* readArg(char *ptr, StringSlice& result)
+{
+	ptr = skipWhitespace(ptr);
+	result.begin = ptr;
+	for (;;)
+	{
+		auto c = *ptr;
+		if (c == 0 || isWhitespace(c))
+		{
+			break;
+		}
+		++ptr;
+	}
+	result.end = ptr;
+	return ptr;
+}
+
 int CALLBACK WinMain(
 	HINSTANCE hInstance,
 	HINSTANCE hPrevInstance,
 	LPSTR lpCmdLine,
 	int nCmdShow)
 {
+	StringSlice userVertShaderPath = {};
+	StringSlice userFragShaderPath = {};
+	{
+		auto commandLinePtr = lpCmdLine;
+		commandLinePtr = readArg(commandLinePtr, userVertShaderPath);
+		commandLinePtr = readArg(commandLinePtr, userFragShaderPath);
+	}
+
 	const char windowClassName[] = "Shader Baker Class";
 
 	WNDCLASS wc = {};
@@ -315,6 +367,14 @@ int CALLBACK WinMain(
 	}
 
 	appState.keyBuffer = keyBuffer;
+
+	if (stringSliceLength(userVertShaderPath) != 0
+		&& stringSliceLength(userFragShaderPath) != 0)
+	{
+		appState.userVertShaderPath = FilePath{userVertShaderPath};
+		appState.userFragShaderPath = FilePath{userFragShaderPath};
+		appState.loadUserRenderConfig = true;
+	}
 
 	LARGE_INTEGER qpcFreq;
 	QueryPerformanceFrequency(&qpcFreq);
