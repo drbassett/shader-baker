@@ -21,16 +21,16 @@ inline bool PLATFORM_free(void* memory)
 	return VirtualFree(memory, NULL, MEM_RELEASE) != 0;
 }
 
-u8* PLATFORM_readWholeFile(MemoryStack& stack, StringSlice const fileName)
+u8* PLATFORM_readWholeFile(MemoryStack& stack, FilePath const filePath, size_t& fileSize)
 {
 	HANDLE fileHandle;
 	{
-		auto fileNameLength = stringSliceLength(fileName);
+		auto filePathLength = stringSliceLength(filePath.path);
 		auto stackMarker = memoryStackMark(stack);
 
-		auto fileNameCString = (char*) memoryStackPush(stack, fileNameLength);
-		memcpy(fileNameCString, fileName.begin, fileNameLength);
-		fileNameCString[fileNameLength] = 0;
+		auto fileNameCString = (char*) memoryStackPush(stack, filePathLength + 1);
+		memcpy(fileNameCString, filePath.path.begin, filePathLength);
+		fileNameCString[filePathLength] = 0;
 
 		fileHandle = CreateFileA(fileNameCString, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
 	}
@@ -40,17 +40,20 @@ u8* PLATFORM_readWholeFile(MemoryStack& stack, StringSlice const fileName)
 		return nullptr;
 	}
 
-	LARGE_INTEGER fileSize;
-	if (!GetFileSizeEx(fileHandle, &fileSize))
 	{
-		goto error;
+		LARGE_INTEGER size;
+		if (!GetFileSizeEx(fileHandle, &size))
+		{
+			goto error;
+		}
+		fileSize = size.QuadPart;
 	}
 
-	auto result = (u8*) memoryStackPush(stack, fileSize.QuadPart);
+	auto result = (u8*) memoryStackPush(stack, fileSize);
 
 	DWORD bytesRead;
 	auto readPtr = result;
-	auto remainingBytesToRead = fileSize.QuadPart;
+	auto remainingBytesToRead = fileSize;
 	const u32 maxU32 = 0xFFFFFFFF;
 	// the ReadFile function windows provides uses a 32-bit parameter for the
 	// read size. This loop is to overcome this limitation, such that files
@@ -75,6 +78,7 @@ u8* PLATFORM_readWholeFile(MemoryStack& stack, StringSlice const fileName)
 	goto success;
 
 error:
+	fileSize = 0;
 	result = nullptr;
 success:
 	CloseHandle(fileHandle);

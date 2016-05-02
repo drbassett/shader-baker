@@ -19,6 +19,8 @@ endlocal
 
 mkdir %outputDir% 2> nul
 
+copy shaders\* %outputDir% > nul
+
 set ttfFileName=C:\Windows\Fonts\Arial.ttf
 %fontRasterizerDir%\build\rasterize-font %ttfFileName% %outputDir%\arial.font || goto:errorExit
 

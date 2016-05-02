@@ -52,8 +52,8 @@ static void memoryStackResize(MemoryStack& stack)
 
 inline void* memoryStackPush(MemoryStack& stack, size_t size)
 {
-	// The realloc function chooses a new size automatically. If the
-	// requested allocation size is very large, reallocation may need
+	// The resize function chooses a new size automatically. If the
+	// requested allocation size is very large, resizing may need
 	// to happen multiple times. This should happen rarely, if ever.
 	for(;;)
 	{
@@ -77,17 +77,35 @@ inline void memoryStackClear(MemoryStack& stack)
 
 inline MemoryStackMarker memoryStackMark(MemoryStack const& stack)
 {
-	return MemoryStackMarker{stack.top};
+	size_t index = stack.top - stack.begin;
+	return MemoryStackMarker{index};
 }
 
-inline void memoryStackPop(MemoryStack& stack, MemoryStackMarker section)
+inline void memoryStackPop(MemoryStack& stack, MemoryStackMarker marker)
 {
-	stack.top = section.begin;
+	stack.top = stack.begin + marker.index;
 }
 
 inline size_t stringSliceLength(StringSlice str)
 {
 	return str.end - str.begin;
+}
+
+inline StringSlice stringSliceFromCString(char *cstr)
+{
+	StringSlice result = {};
+	result.begin = cstr;
+	for (;;)
+	{
+		auto c = *cstr;
+		if (c == 0)
+		{
+			break;
+		}
+		++cstr;
+	}
+	result.end = cstr;
+	return result;
 }
 
 inline i32 rectWidth(RectI32 const& rect)
@@ -402,12 +420,10 @@ static inline size_t megabytes(size_t value)
 
 bool initApplication(ApplicationState& appState)
 {
-	if (!memoryStackInit(appState.scratchMemory, megabytes(1)))
+	if (!memoryStackInit(appState.scratchMemory, 1))
 	{
 		return false;
 	}
-
-	glPointSize(10.0f);
 
 	GLchar infoLog[1024];
 	GLsizei maxLogLength = 1024;
@@ -451,6 +467,8 @@ bool initApplication(ApplicationState& appState)
 
 	appState.textRenderConfig.program = glCreateProgram();
 
+	appState.userVertShaderPath = FilePath{stringSliceFromCString("user-shader.vert")};
+	appState.userFragShaderPath = FilePath{stringSliceFromCString("user-shader.frag")};
 	initUserRenderConfig(maxLogLength, infoLog, appState.userRenderConfig);
 
 	if (!createTextRenderingProgram(maxLogLength, infoLog, appState.textRenderConfig.program))
@@ -602,9 +620,6 @@ static inline void processCommand(ApplicationState& appState)
 	if (command == "set-color")
 	{
 		glClearColor(0.2f, 0.15f, 0.15f, 1.0f);
-	} else if (command == "set-point-size")
-	{
-		glPointSize(15.0f);
 	} else
 	{
 //TODO handle unknown command
@@ -647,9 +662,68 @@ static inline void processKeyBuffer(ApplicationState& appState)
 	}
 }
 
+void loadUserProgram(
+	MemoryStack& stack,
+	FilePath vertShaderPath,
+	FilePath fragShaderPath,
+	UserRenderConfig const& renderConfig)
+{
+	size_t fileSize;
+
+	bool success = true;
+
+	{
+		auto stackMarker = memoryStackMark(stack);
+		auto fileContents = PLATFORM_readWholeFile(stack, vertShaderPath, fileSize);
+//TODO there is no guarantee that fileSize is big enough to fit in a GLint - bulletproof this
+		auto fileSizeTruncated = (GLint) fileSize;
+		if (fileContents)
+		{
+			glShaderSource(renderConfig.vertShader, 1, (GLchar**) &fileContents, &fileSizeTruncated);
+			glCompileShader(renderConfig.vertShader);
+			assert(shaderCompileSuccessful(renderConfig.vertShader));
+		} else
+		{
+			success = false;
+		}
+		memoryStackPop(stack, stackMarker);
+	}
+
+	{
+		auto stackMarker = memoryStackMark(stack);
+		auto fileContents = PLATFORM_readWholeFile(stack, fragShaderPath, fileSize);
+//TODO there is no guarantee that fileSize is big enough to fit in a GLint - bulletproof this
+		auto fileSizeTruncated = (GLint) fileSize;
+		if (fileContents)
+		{
+			glShaderSource(renderConfig.fragShader, 1, (GLchar**) &fileContents, &fileSizeTruncated);
+			glCompileShader(renderConfig.fragShader);
+			assert(shaderCompileSuccessful(renderConfig.fragShader));
+		} else
+		{
+			success = false;
+		}
+		memoryStackPop(stack, stackMarker);
+	}
+
+	if (!success)
+	{
+		assert(false);
+		return;
+	}
+	
+	glLinkProgram(renderConfig.program);
+	assert(programLinkSuccessful(renderConfig.program));
+}
+
 void updateApplication(ApplicationState& appState)
 {
 	processKeyBuffer(appState);
+	loadUserProgram(
+		appState.scratchMemory,
+		appState.userVertShaderPath,
+		appState.userFragShaderPath,
+		appState.userRenderConfig);
 
 	auto windowWidth = (i32) appState.windowWidth;
 	auto windowHeight = (i32) appState.windowHeight;

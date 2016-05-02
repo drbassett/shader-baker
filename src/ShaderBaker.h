@@ -7,7 +7,8 @@ struct MemoryStack
 
 struct MemoryStackMarker
 {
-	u8 *begin;
+	// this field cannot be a pointer since memory stacks can be reallocated
+	size_t index;
 };
 
 struct StringSlice
