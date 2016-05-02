@@ -1,111 +1,110 @@
+#include <cassert>
 #include <cstdio>
 #include <gl/gl.h>
 #include "../include/glcorearb.h"
 #include "generated/glFunctions.cpp"
+#include "Types.h"
+#include "ShaderBaker.h"
+#include "Platform.h"
 
 #define arrayLength(array) sizeof(array) / sizeof(array[0])
 
-struct StringSlice
+bool memoryStackInit(MemoryStack& stack, size_t initialSize)
 {
-	char *begin, *end;
-};
-
-struct TextLine
-{
-	i32 leftEdge, baseline;
-	StringSlice text;
-};
-
-struct GlyphMetrics
-{
-	i32 offsetTop, offsetLeft;
-	u32 advanceX;
-};
-
-struct AsciiFont
-{
-	u32 bitmapWidth, bitmapHeight;
-	u32 advanceY;
-	GlyphMetrics glyphMetrics[256];
-};
-
-struct SimpleRenderConfig
-{
-	GLuint program;
-	GLuint vao;
-};
-
-struct TextRenderConfig
-{
-	GLuint texture;
-	GLuint textureSampler;
-	GLint textureUnit;
-
-	GLuint vao;
-	GLuint charDataBuffer;
-
-	GLuint program;
-	GLint unifViewportSizePx, unifCharacterSizePx, unifCharacterSampler;
-	GLint attribLowerLeft, attribCharacterIndex;
-};
-
-struct MicroSeconds
-{
-	u64 value;
-};
-
-struct ApplicationState
-{
-	AsciiFont font;
-
-	SimpleRenderConfig simpleRenderConfig;
-	TextRenderConfig textRenderConfig;
-
-	char *keyBuffer;
-	size_t keyBufferLength;
-
-	unsigned windowWidth, windowHeight;
-
-	size_t textLineCount;
-	TextLine* textLines;
-
-	char commandLine[256];
-	size_t commandLineLength, commandLineCapacity;
-
-	MicroSeconds currentTime;
-};
-
-struct Vec2I32
-{
-	i32 x, y;
-};
-
-struct RectI32
-{
-	Vec2I32 min, max;
-};
-
-inline void assert(bool condition)
-{
-	if (!condition)
+	assert(initialSize > 0);
+	
+	auto memory = (u8*) PLATFORM_alloc(initialSize);
+	if (memory == nullptr)
 	{
-		*((char*) nullptr);
+		return false;
 	}
+
+	stack.begin = memory;
+	stack.end = memory + initialSize;
+	stack.top = memory;
+	return true;
 }
 
-static inline size_t stringSliceLength(StringSlice str)
+static void memoryStackResize(MemoryStack& stack)
+{
+	auto currentSize = stack.end - stack.begin;
+	// double the memory size
+	auto newSize = currentSize << 1;
+//TODO overflow check - kill the program if overflow
+	assert(newSize > currentSize);
+	auto newMemory = (u8*) PLATFORM_alloc(newSize);
+//TODO probably need to kill the program if the platform can't give us more memory
+	assert(newMemory != nullptr);
+
+//TODO investigate some kind of platform-specific realloc. This could be more efficient,
+// since virtual memory systems could theoretically elide this copy simply by adding more
+// pages to the application, rather than allocating a whole new chunk of memory.
+	auto currentReservedSize = stack.top - stack.begin;
+	memcpy(newMemory, stack.begin, currentReservedSize);
+
+	auto freeResult = PLATFORM_free(stack.begin);
+	assert(freeResult);
+
+	stack.begin = newMemory;
+	stack.end = newMemory + newSize;
+	stack.top = newMemory + currentReservedSize;
+}
+
+inline void* memoryStackPush(MemoryStack& stack, size_t size)
+{
+	// The realloc function chooses a new size automatically. If the
+	// requested allocation size is very large, reallocation may need
+	// to happen multiple times. This should happen rarely, if ever.
+	for(;;)
+	{
+		size_t remainingSize = stack.end - stack.top;
+		if (size <= remainingSize)
+		{
+			break;
+		}
+		memoryStackResize(stack);
+	}
+
+	auto result = stack.top;
+	stack.top += size;
+	return result;
+}
+
+inline void memoryStackClear(MemoryStack& stack)
+{
+	stack.top = stack.begin;
+}
+
+inline MemoryStackMarker memoryStackMark(MemoryStack const& stack)
+{
+	return MemoryStackMarker{stack.top};
+}
+
+inline void memoryStackPop(MemoryStack& stack, MemoryStackMarker section)
+{
+	stack.top = section.begin;
+}
+
+inline size_t stringSliceLength(StringSlice str)
 {
 	return str.end - str.begin;
 }
 
-static inline i32 rectWidth(RectI32 const& rect)
+inline i32 rectWidth(RectI32 const& rect)
 {
 	return rect.max.x - rect.min.x;
 }
 
-static inline i32 rectHeight(RectI32 const& rect)
+inline i32 rectHeight(RectI32 const& rect)
 {
 	return rect.max.y - rect.min.y;
+}
+
+static inline bool shaderCompileSuccessful(GLuint shader)
+{
+	GLint compileStatus;
+	glGetShaderiv(shader, GL_COMPILE_STATUS, &compileStatus);
+	return compileStatus == GL_TRUE;
 }
 
 static bool compileShaderChecked(
@@ -120,7 +119,7 @@ static bool compileShaderChecked(
 
 	GLint compileStatus;
 	glGetShaderiv(shader, GL_COMPILE_STATUS, &compileStatus);
-	if (compileStatus == GL_TRUE)
+	if (shaderCompileSuccessful(shader))
 	{
 		return true;
 	}
@@ -133,17 +132,19 @@ static bool compileShaderChecked(
 	return false;
 }
 
+static bool programLinkSuccessful(GLuint program)
+{
+	GLint linkStatus;
+	glGetProgramiv(program, GL_LINK_STATUS, &linkStatus);
+	return linkStatus == GL_TRUE;
+}
+
 static bool linkProgramChecked(
-	GLuint program,
-	GLsizei maxLogLength,
-	GLchar *log,
-	GLsizei& logLength)
+	GLuint program, GLsizei maxLogLength, GLchar *log, GLsizei& logLength)
 {
 	glLinkProgram(program);
 
-	GLint linkStatus;
-	glGetProgramiv(program, GL_LINK_STATUS, &linkStatus);
-	if (linkStatus == GL_TRUE)
+	if (programLinkSuccessful(program))
 	{
 		return true;
 	}
@@ -154,64 +155,6 @@ static bool linkProgramChecked(
 	glGetProgramInfoLog(program, maxLogLength, &logLength, log);
 
 	return false;
-}
-
-static inline bool createSimpleProgram(GLsizei maxLogLength, GLchar* infoLog, GLuint program)
-{
-	const char* vsSource = R"(
-		#version 330
-
-		void main()
-		{
-			gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
-		}
-	)";
-
-	const char* fsSource = R"(
-		#version 330
-
-		out vec4 color;
-
-		void main()
-		{
-			color = vec4(0.8, 0.0, 0.0, 1.0);
-		}
-	)";
-
-	bool success = true;
-	GLsizei logLength;
-
-	auto vs = glCreateShader(GL_VERTEX_SHADER);
-	auto fs = glCreateShader(GL_FRAGMENT_SHADER);
-	
-	if (!compileShaderChecked(vs, vsSource, maxLogLength, infoLog, logLength))
-	{
-		goto resultFail;
-	}
-
-	if (!compileShaderChecked(fs, fsSource, maxLogLength, infoLog, logLength))
-	{
-		goto resultFail;
-	}
-
-	glAttachShader(program, vs);
-	glAttachShader(program, fs);
-	if (!linkProgramChecked(program, maxLogLength, infoLog, logLength))
-	{
-		goto resultFail;
-	}
-	glDetachShader(program, vs);
-	glDetachShader(program, fs);
-
-	goto resultSuccess;
-
-resultFail:
-	success = false;
-resultSuccess:
-	glDeleteShader(vs);
-	glDeleteShader(fs);
-
-	return success;
 }
 
 static inline bool createTextRenderingProgram(GLsizei maxLogLength, GLchar* infoLog, GLuint program)
@@ -349,6 +292,43 @@ resultSuccess:
 	return success;
 }
 
+static inline void initUserRenderConfig(
+	GLsizei maxLogLength, GLchar* infoLog, UserRenderConfig& userRenderConfig)
+{
+	const char* vsSource = R"(
+		#version 330
+
+		void main() { }
+	)";
+
+	const char* fsSource = R"(
+		#version 330
+
+		out vec4 fragColor;
+
+		void main() { }
+	)";
+
+	glGenVertexArrays(1, &userRenderConfig.vao);
+	userRenderConfig.vertShader = glCreateShader(GL_VERTEX_SHADER);
+	userRenderConfig.fragShader = glCreateShader(GL_FRAGMENT_SHADER);
+	userRenderConfig.program = glCreateProgram();
+
+	glAttachShader(userRenderConfig.program, userRenderConfig.vertShader);
+	glAttachShader(userRenderConfig.program, userRenderConfig.fragShader);
+
+	glShaderSource(userRenderConfig.vertShader, 1, &vsSource, 0);
+	glCompileShader(userRenderConfig.vertShader);
+	assert(shaderCompileSuccessful(userRenderConfig.vertShader));
+
+	glShaderSource(userRenderConfig.fragShader, 1, &fsSource, 0);
+	glCompileShader(userRenderConfig.fragShader);
+	assert(shaderCompileSuccessful(userRenderConfig.fragShader));
+
+	glLinkProgram(userRenderConfig.program);
+	assert(programLinkSuccessful(userRenderConfig.program));
+}
+
 static inline bool readFontFile(ApplicationState& appState, const char *fileName)
 {
 	auto fontFile = fopen(fileName, "rb");
@@ -403,25 +383,34 @@ cleanup1:
 
 void destroyApplication(ApplicationState& appState)
 {
-	glDeleteProgram(appState.simpleRenderConfig.program);
-	glDeleteVertexArrays(1, &appState.simpleRenderConfig.vao);
-
 	glDeleteTextures(1, &appState.textRenderConfig.texture);
 	glDeleteSamplers(1, &appState.textRenderConfig.textureSampler);
 	glDeleteBuffers(1, &appState.textRenderConfig.charDataBuffer);
 	glDeleteVertexArrays(1, &appState.textRenderConfig.vao);
 	glDeleteProgram(appState.textRenderConfig.program);
+
+	glDeleteVertexArrays(1, &appState.userRenderConfig.vao);
+	glDeleteShader(appState.userRenderConfig.vertShader);
+	glDeleteShader(appState.userRenderConfig.fragShader);
+	glDeleteProgram(appState.userRenderConfig.program);
+}
+
+static inline size_t megabytes(size_t value)
+{
+	return value * 1024 * 1024;
 }
 
 bool initApplication(ApplicationState& appState)
 {
+	if (!memoryStackInit(appState.scratchMemory, megabytes(1)))
+	{
+		return false;
+	}
+
 	glPointSize(10.0f);
 
 	GLchar infoLog[1024];
 	GLsizei maxLogLength = 1024;
-
-	appState.simpleRenderConfig.program = glCreateProgram();
-	glGenVertexArrays(1, &appState.simpleRenderConfig.vao);
 
 	glGenTextures(1, &appState.textRenderConfig.texture);
 	glGenSamplers(1, &appState.textRenderConfig.textureSampler);
@@ -462,10 +451,7 @@ bool initApplication(ApplicationState& appState)
 
 	appState.textRenderConfig.program = glCreateProgram();
 
-	if (!createSimpleProgram(maxLogLength, infoLog, appState.simpleRenderConfig.program))
-	{
-		goto resultFail;
-	}
+	initUserRenderConfig(maxLogLength, infoLog, appState.userRenderConfig);
 
 	if (!createTextRenderingProgram(maxLogLength, infoLog, appState.textRenderConfig.program))
 	{
@@ -712,8 +698,8 @@ void updateApplication(ApplicationState& appState)
 		previewArea.min.y,
 		rectWidth(previewArea),
 		rectHeight(previewArea));
-	glBindVertexArray(appState.simpleRenderConfig.vao);
-	glUseProgram(appState.simpleRenderConfig.program);
-	glDrawArrays(GL_POINTS, 0, 1);
+	glBindVertexArray(appState.userRenderConfig.vao);
+	glUseProgram(appState.userRenderConfig.program);
+	glDrawArrays(GL_TRIANGLES, 0, 3);
 }
 

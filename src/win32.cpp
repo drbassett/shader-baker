@@ -4,13 +4,82 @@
 
 #pragma warning(pop)
 
-#include "Types.h"
 #include "ShaderBaker.cpp"
 #include "../include/wglext.h"
 #include <cstdio>
 
 //TODO printf does not work with Win32 GUI out of the box. Need to do something with AttachConsole/AllocConsole to make it work.
 #define FATAL(message) printf(message); return 1;
+
+inline void* PLATFORM_alloc(size_t size)
+{
+	return VirtualAlloc(NULL, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+}
+
+inline bool PLATFORM_free(void* memory)
+{
+	return VirtualFree(memory, NULL, MEM_RELEASE) != 0;
+}
+
+u8* PLATFORM_readWholeFile(MemoryStack& stack, StringSlice const fileName)
+{
+	HANDLE fileHandle;
+	{
+		auto fileNameLength = stringSliceLength(fileName);
+		auto stackMarker = memoryStackMark(stack);
+
+		auto fileNameCString = (char*) memoryStackPush(stack, fileNameLength);
+		memcpy(fileNameCString, fileName.begin, fileNameLength);
+		fileNameCString[fileNameLength] = 0;
+
+		fileHandle = CreateFileA(fileNameCString, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+	}
+
+	if (fileHandle == INVALID_HANDLE_VALUE)
+	{
+		return nullptr;
+	}
+
+	LARGE_INTEGER fileSize;
+	if (!GetFileSizeEx(fileHandle, &fileSize))
+	{
+		goto error;
+	}
+
+	auto result = (u8*) memoryStackPush(stack, fileSize.QuadPart);
+
+	DWORD bytesRead;
+	auto readPtr = result;
+	auto remainingBytesToRead = fileSize.QuadPart;
+	const u32 maxU32 = 0xFFFFFFFF;
+	// the ReadFile function windows provides uses a 32-bit parameter for the
+	// read size. This loop is to overcome this limitation, such that files
+	// larger than 4GB can be read.
+	while (remainingBytesToRead > maxU32)
+	{
+		if (!ReadFile(fileHandle, readPtr, maxU32, &bytesRead, NULL))
+		{
+			goto error;
+		}
+		assert(bytesRead == maxU32);
+
+		remainingBytesToRead += maxU32;
+		readPtr += maxU32;
+	}
+	if (!ReadFile(fileHandle, readPtr, (u32) remainingBytesToRead, &bytesRead, NULL))
+	{
+		goto error;
+	}
+	assert(bytesRead == remainingBytesToRead);
+
+	goto success;
+
+error:
+	result = nullptr;
+success:
+	CloseHandle(fileHandle);
+	return result;
+}
 
 char keyBuffer[1024];
 
