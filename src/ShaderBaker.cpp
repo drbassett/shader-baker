@@ -725,6 +725,7 @@ void updateApplication(ApplicationState& appState)
 			appState.userVertShaderPath,
 			appState.userFragShaderPath,
 			appState.userRenderConfig);
+		appState.loadUserRenderConfig = false;
 	}
 
 	auto windowWidth = (i32) appState.windowWidth;
@@ -777,5 +778,7 @@ void updateApplication(ApplicationState& appState)
 	glBindVertexArray(appState.userRenderConfig.vao);
 	glUseProgram(appState.userRenderConfig.program);
 	glDrawArrays(GL_TRIANGLES, 0, 3);
+
+	memoryStackClear(appState.scratchMemory);
 }
 

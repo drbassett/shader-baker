@@ -85,6 +85,49 @@ success:
 	return result;
 }
 
+bool fileTimesEqual(FILETIME lhs, FILETIME rhs)
+{
+	return lhs.dwLowDateTime == rhs.dwLowDateTime && lhs.dwHighDateTime == rhs.dwHighDateTime;
+}
+
+bool getFileWriteTime(MemoryStack& stack, FilePath const filePath, FILETIME& writeTime)
+{
+	HANDLE fileHandle;
+	{
+		auto filePathLength = stringSliceLength(filePath.path);
+		auto stackMarker = memoryStackMark(stack);
+
+		auto fileNameCString = (char*) memoryStackPush(stack, filePathLength + 1);
+		memcpy(fileNameCString, filePath.path.begin, filePathLength);
+		fileNameCString[filePathLength] = 0;
+
+		fileHandle = CreateFileA(fileNameCString, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+	}
+
+	if (fileHandle == INVALID_HANDLE_VALUE)
+	{
+		return false;
+	}
+
+	{
+		FILETIME createTime, accessTime;
+		if (!GetFileTime(fileHandle, &createTime, &accessTime, &writeTime))
+		{
+			goto error;
+		}
+	}
+
+	bool result = true;
+	goto success;
+
+error:
+	result = false;
+
+success:
+	CloseHandle(fileHandle);
+	return result;
+}
+
 char keyBuffer[1024];
 
 ApplicationState appState = {};
@@ -319,12 +362,12 @@ int CALLBACK WinMain(
 	LPSTR lpCmdLine,
 	int nCmdShow)
 {
-	StringSlice userVertShaderPath = {};
-	StringSlice userFragShaderPath = {};
+	FilePath userVertShaderPath = {};
+	FilePath userFragShaderPath = {};
 	{
 		auto commandLinePtr = lpCmdLine;
-		commandLinePtr = readArg(commandLinePtr, userVertShaderPath);
-		commandLinePtr = readArg(commandLinePtr, userFragShaderPath);
+		commandLinePtr = readArg(commandLinePtr, userVertShaderPath.path);
+		commandLinePtr = readArg(commandLinePtr, userFragShaderPath.path);
 	}
 
 	const char windowClassName[] = "Shader Baker Class";
@@ -368,13 +411,16 @@ int CALLBACK WinMain(
 
 	appState.keyBuffer = keyBuffer;
 
-	if (stringSliceLength(userVertShaderPath) != 0
-		&& stringSliceLength(userFragShaderPath) != 0)
+	if (stringSliceLength(userVertShaderPath.path) != 0
+		&& stringSliceLength(userFragShaderPath.path) != 0)
 	{
-		appState.userVertShaderPath = FilePath{userVertShaderPath};
-		appState.userFragShaderPath = FilePath{userFragShaderPath};
+		appState.userVertShaderPath = userVertShaderPath;
+		appState.userFragShaderPath = userFragShaderPath;
 		appState.loadUserRenderConfig = true;
 	}
+
+	FILETIME lastVertShaderWriteTime = {};
+	FILETIME lastFragShaderWriteTime = {};
 
 	LARGE_INTEGER qpcFreq;
 	QueryPerformanceFrequency(&qpcFreq);
@@ -395,6 +441,22 @@ int CALLBACK WinMain(
 			}
 			TranslateMessage(&message);
 			DispatchMessageA(&message);
+		}
+
+		FILETIME nextVertShaderWriteTime = {};
+		if (getFileWriteTime(appState.scratchMemory, userVertShaderPath, nextVertShaderWriteTime)
+			&& !fileTimesEqual(nextVertShaderWriteTime, lastVertShaderWriteTime))
+		{
+			lastVertShaderWriteTime = nextVertShaderWriteTime;
+			appState.loadUserRenderConfig = true;
+		}
+
+		FILETIME nextFragShaderWriteTime = {};
+		if (getFileWriteTime(appState.scratchMemory, userFragShaderPath, nextFragShaderWriteTime)
+			&& !fileTimesEqual(nextFragShaderWriteTime, lastFragShaderWriteTime))
+		{
+			lastFragShaderWriteTime = nextFragShaderWriteTime;
+			appState.loadUserRenderConfig = true;
 		}
 
 		LARGE_INTEGER qpcTime;
