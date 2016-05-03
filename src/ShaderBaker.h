@@ -5,6 +5,12 @@ struct MemoryStack
 	u8 *begin, *end, *top;
 };
 
+struct LinkedMemoryStack
+{
+	MemoryStack stack;
+	LinkedMemoryStack *next;
+};
+
 struct MemoryStackMarker
 {
 	// this field cannot be a pointer since memory stacks can be reallocated
@@ -68,7 +74,7 @@ struct FilePath
 
 struct ApplicationState
 {
-	MemoryStack scratchMemory;
+	LinkedMemoryStack scratchMemory;
 
 	AsciiFont font;
 

@@ -21,17 +21,14 @@ inline bool PLATFORM_free(void* memory)
 	return VirtualFree(memory, NULL, MEM_RELEASE) != 0;
 }
 
-u8* PLATFORM_readWholeFile(MemoryStack& stack, FilePath const filePath, size_t& fileSize)
+u8* PLATFORM_readWholeFile(LinkedMemoryStack& stack, FilePath const filePath, size_t& fileSize)
 {
 	HANDLE fileHandle;
 	{
 		auto filePathLength = stringSliceLength(filePath.path);
-		auto stackMarker = memoryStackMark(stack);
-
 		auto fileNameCString = (char*) memoryStackPush(stack, filePathLength + 1);
 		memcpy(fileNameCString, filePath.path.begin, filePathLength);
 		fileNameCString[filePathLength] = 0;
-
 		fileHandle = CreateFileA(fileNameCString, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
 	}
 
@@ -90,17 +87,14 @@ bool fileTimesEqual(FILETIME lhs, FILETIME rhs)
 	return lhs.dwLowDateTime == rhs.dwLowDateTime && lhs.dwHighDateTime == rhs.dwHighDateTime;
 }
 
-bool getFileWriteTime(MemoryStack& stack, FilePath const filePath, FILETIME& writeTime)
+bool getFileWriteTime(LinkedMemoryStack& stack, FilePath const filePath, FILETIME& writeTime)
 {
 	HANDLE fileHandle;
 	{
 		auto filePathLength = stringSliceLength(filePath.path);
-		auto stackMarker = memoryStackMark(stack);
-
 		auto fileNameCString = (char*) memoryStackPush(stack, filePathLength + 1);
 		memcpy(fileNameCString, filePath.path.begin, filePathLength);
 		fileNameCString[filePathLength] = 0;
-
 		fileHandle = CreateFileA(fileNameCString, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
 	}
 

@@ -25,65 +25,76 @@ bool memoryStackInit(MemoryStack& stack, size_t initialSize)
 	return true;
 }
 
-static void memoryStackResize(MemoryStack& stack)
+static void memoryStackExtend(LinkedMemoryStack& stack, size_t requiredSpace)
 {
-	auto currentSize = stack.end - stack.begin;
-	// double the memory size
-	auto newSize = currentSize << 1;
-//TODO overflow check - kill the program if overflow
-	assert(newSize > currentSize);
-	auto newMemory = (u8*) PLATFORM_alloc(newSize);
-//TODO probably need to kill the program if the platform can't give us more memory
-	assert(newMemory != nullptr);
-
-//TODO investigate some kind of platform-specific realloc. This could be more efficient,
-// since virtual memory systems could theoretically elide this copy simply by adding more
-// pages to the application, rather than allocating a whole new chunk of memory.
-	auto currentReservedSize = stack.top - stack.begin;
-	memcpy(newMemory, stack.begin, currentReservedSize);
-
-	auto freeResult = PLATFORM_free(stack.begin);
-	assert(freeResult);
-
-	stack.begin = newMemory;
-	stack.end = newMemory + newSize;
-	stack.top = newMemory + currentReservedSize;
-}
-
-inline void* memoryStackPush(MemoryStack& stack, size_t size)
-{
-	// The resize function chooses a new size automatically. If the
-	// requested allocation size is very large, resizing may need
-	// to happen multiple times. This should happen rarely, if ever.
-	for(;;)
+	size_t currentSize = stack.stack.end - stack.stack.begin;
+//TODO handle overflow
+	size_t extensionSize = (currentSize << 1);
+	requiredSpace += sizeof(LinkedMemoryStack);
+	if (requiredSpace > extensionSize)
 	{
-		size_t remainingSize = stack.end - stack.top;
-		if (size <= remainingSize)
-		{
-			break;
-		}
-		memoryStackResize(stack);
+		extensionSize = requiredSpace;
 	}
 
-	auto result = stack.top;
-	stack.top += size;
+	LinkedMemoryStack extension = {};
+	memoryStackInit(extension.stack, extensionSize);
+	extension.next = (LinkedMemoryStack*) extension.stack.begin;
+	extension.stack.top += sizeof(LinkedMemoryStack);
+	*extension.next = stack;
+	stack = extension;
+}
+
+//TODO memory alignment
+inline void* memoryStackPush(LinkedMemoryStack& stack, size_t size)
+{
+	size_t remainingSize = stack.stack.end - stack.stack.top;
+	if (size > remainingSize)
+	{
+		memoryStackExtend(stack, size);
+	}
+
+	auto result = stack.stack.top;
+	stack.stack.top += size;
 	return result;
 }
 
-inline void memoryStackClear(MemoryStack& stack)
+inline void memoryStackClear(LinkedMemoryStack& stack)
 {
-	stack.top = stack.begin;
+	stack.stack.top = stack.stack.begin;
 }
 
-inline MemoryStackMarker memoryStackMark(MemoryStack const& stack)
+static void coalesceLinkedMemoryStacks(LinkedMemoryStack& head)
 {
-	size_t index = stack.top - stack.begin;
-	return MemoryStackMarker{index};
-}
+	if (head.next == nullptr)
+	{
+		memoryStackClear(head);
+		return;
+	}
 
-inline void memoryStackPop(MemoryStack& stack, MemoryStackMarker marker)
-{
-	stack.top = stack.begin + marker.index;
+//TODO handle overflow
+	size_t totalSize = 0;
+	{
+		LinkedMemoryStack link = head;
+		for (;;)
+		{
+			auto stackBegin = link.stack.begin;
+			totalSize += link.stack.end - stackBegin;
+			auto next = link.next;
+			if (next == nullptr)
+			{
+				break;
+			}
+			link = *next;
+
+			auto freed = PLATFORM_free(stackBegin);
+			assert(freed);
+		}
+		auto freed = PLATFORM_free(link.stack.begin);
+		assert(freed);
+	}
+
+	memoryStackInit(head.stack, totalSize);
+	head.next = nullptr;
 }
 
 inline size_t stringSliceLength(StringSlice str)
@@ -420,10 +431,11 @@ static inline size_t megabytes(size_t value)
 
 bool initApplication(ApplicationState& appState)
 {
-	if (!memoryStackInit(appState.scratchMemory, 1))
+	if (!memoryStackInit(appState.scratchMemory.stack, sizeof(LinkedMemoryStack)))
 	{
 		return false;
 	}
+	appState.scratchMemory.next = nullptr;
 
 	GLchar infoLog[1024];
 	GLsizei maxLogLength = 1024;
@@ -662,7 +674,7 @@ static inline void processKeyBuffer(ApplicationState& appState)
 }
 
 void loadUserRenderConfig(
-	MemoryStack& stack,
+	LinkedMemoryStack& stack,
 	FilePath vertShaderPath,
 	FilePath fragShaderPath,
 	UserRenderConfig const& renderConfig)
@@ -672,7 +684,6 @@ void loadUserRenderConfig(
 	bool success = true;
 
 	{
-		auto stackMarker = memoryStackMark(stack);
 		auto fileContents = PLATFORM_readWholeFile(stack, vertShaderPath, fileSize);
 //TODO there is no guarantee that fileSize is big enough to fit in a GLint - bulletproof this
 		auto fileSizeTruncated = (GLint) fileSize;
@@ -685,11 +696,9 @@ void loadUserRenderConfig(
 		{
 			success = false;
 		}
-		memoryStackPop(stack, stackMarker);
 	}
 
 	{
-		auto stackMarker = memoryStackMark(stack);
 		auto fileContents = PLATFORM_readWholeFile(stack, fragShaderPath, fileSize);
 //TODO there is no guarantee that fileSize is big enough to fit in a GLint - bulletproof this
 		auto fileSizeTruncated = (GLint) fileSize;
@@ -702,7 +711,6 @@ void loadUserRenderConfig(
 		{
 			success = false;
 		}
-		memoryStackPop(stack, stackMarker);
 	}
 
 	if (!success)
@@ -779,6 +787,6 @@ void updateApplication(ApplicationState& appState)
 	glUseProgram(appState.userRenderConfig.program);
 	glDrawArrays(GL_TRIANGLES, 0, 3);
 
-	memoryStackClear(appState.scratchMemory);
+	coalesceLinkedMemoryStacks(appState.scratchMemory);
 }
 
