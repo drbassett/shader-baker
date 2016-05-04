@@ -136,29 +136,11 @@ static inline bool shaderCompileSuccessful(GLuint shader)
 	return compileStatus == GL_TRUE;
 }
 
-static bool compileShaderChecked(
-	GLuint shader,
-	const char* source,
-	GLsizei maxLogLength,
-	GLchar *log,
-	GLsizei& logLength)
+static bool compileShaderChecked(GLuint shader, const char* source)
 {
 	glShaderSource(shader, 1, &source, 0);
 	glCompileShader(shader);
-
-	GLint compileStatus;
-	glGetShaderiv(shader, GL_COMPILE_STATUS, &compileStatus);
-	if (shaderCompileSuccessful(shader))
-	{
-		return true;
-	}
-
-	// GLint infoLogLength;
-	// glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &infoLogLength);
-
-	glGetShaderInfoLog(shader, maxLogLength, &logLength, log);
-
-	return false;
+	return shaderCompileSuccessful(shader);
 }
 
 static bool programLinkSuccessful(GLuint program)
@@ -168,25 +150,7 @@ static bool programLinkSuccessful(GLuint program)
 	return linkStatus == GL_TRUE;
 }
 
-static bool linkProgramChecked(
-	GLuint program, GLsizei maxLogLength, GLchar *log, GLsizei& logLength)
-{
-	glLinkProgram(program);
-
-	if (programLinkSuccessful(program))
-	{
-		return true;
-	}
-
-	// GLint infoLogLength;
-	// glGetProgramiv(program, GL_INFO_LOG_LENGTH, &infoLogLength);
-
-	glGetProgramInfoLog(program, maxLogLength, &logLength, log);
-
-	return false;
-}
-
-static inline bool createTextRenderingProgram(GLsizei maxLogLength, GLchar* infoLog, GLuint program)
+static inline bool initTextRenderingProgram(GLuint program)
 {
 	const char* vsSource = R"(
 		#version 330
@@ -276,44 +240,43 @@ static inline bool createTextRenderingProgram(GLsizei maxLogLength, GLchar* info
 		}
 	)";
 
-	bool success = true;
-	GLsizei logLength;
-
 	auto vs = glCreateShader(GL_VERTEX_SHADER);
 	auto gs = glCreateShader(GL_GEOMETRY_SHADER);
 	auto fs = glCreateShader(GL_FRAGMENT_SHADER);
 
-	if (!compileShaderChecked(vs, vsSource, maxLogLength, infoLog, logLength))
+	if (!compileShaderChecked(vs, vsSource))
 	{
-		goto resultFail;
+		goto error;
 	}
 
-	if (!compileShaderChecked(gs, gsSource, maxLogLength, infoLog, logLength))
+	if (!compileShaderChecked(gs, gsSource))
 	{
-		goto resultFail;
+		goto error;
 	}
 
-	if (!compileShaderChecked(fs, fsSource, maxLogLength, infoLog, logLength))
+	if (!compileShaderChecked(fs, fsSource))
 	{
-		goto resultFail;
+		goto error;
 	}
 
 	glAttachShader(program, vs);
 	glAttachShader(program, gs);
 	glAttachShader(program, fs);
-	if (!linkProgramChecked(program, maxLogLength, infoLog, logLength))
+	glLinkProgram(program);
+	if (!programLinkSuccessful(program))
 	{
-		goto resultFail;
+		goto error;
 	}
 	glDetachShader(program, vs);
 	glDetachShader(program, gs);
 	glDetachShader(program, fs);
 
-	goto resultSuccess;
+	bool success = true;
+	goto success;
 
-resultFail:
+error:
 	success = false;
-resultSuccess:
+success:
 	glDeleteShader(vs);
 	glDeleteShader(gs);
 	glDeleteShader(fs);
@@ -321,8 +284,7 @@ resultSuccess:
 	return success;
 }
 
-static inline void initUserRenderConfig(
-	GLsizei maxLogLength, GLchar* infoLog, UserRenderConfig& userRenderConfig)
+static inline void initUserRenderConfig(UserRenderConfig& userRenderConfig)
 {
 	const char* vsSource = R"(
 		#version 330
@@ -437,9 +399,6 @@ bool initApplication(ApplicationState& appState)
 	}
 	appState.scratchMemory.next = nullptr;
 
-	GLchar infoLog[1024];
-	GLsizei maxLogLength = 1024;
-
 	glGenTextures(1, &appState.textRenderConfig.texture);
 	glGenSamplers(1, &appState.textRenderConfig.textureSampler);
 	glSamplerParameteri(
@@ -480,9 +439,9 @@ bool initApplication(ApplicationState& appState)
 	appState.textRenderConfig.program = glCreateProgram();
 
 	appState.loadUserRenderConfig = false;
-	initUserRenderConfig(maxLogLength, infoLog, appState.userRenderConfig);
+	initUserRenderConfig(appState.userRenderConfig);
 
-	if (!createTextRenderingProgram(maxLogLength, infoLog, appState.textRenderConfig.program))
+	if (!initTextRenderingProgram(appState.textRenderConfig.program))
 	{
 		goto resultFail;
 	}
