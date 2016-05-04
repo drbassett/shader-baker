@@ -72,8 +72,25 @@ struct FilePath
 	StringSlice path;
 };
 
+struct InfoLogTextChunk
+{
+	u32 count;
+	InfoLogTextChunk *next;
+	char text[1024];
+};
+
+struct InfoLogErrors
+{
+	InfoLogTextChunk
+		*vertShaderErrors,
+		*fragShaderErrors,
+		*programErrors,
+		*freeList;
+};
+
 struct ApplicationState
 {
+	MemoryStack permMemory;
 	LinkedMemoryStack scratchMemory;
 
 	AsciiFont font;
@@ -83,6 +100,8 @@ struct ApplicationState
 	bool loadUserRenderConfig;
 	FilePath userFragShaderPath, userVertShaderPath;
 	UserRenderConfig userRenderConfig;
+
+	InfoLogErrors infoLogErrors;
 
 	char *keyBuffer;
 	size_t keyBufferLength;

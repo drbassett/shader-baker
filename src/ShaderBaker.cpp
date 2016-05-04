@@ -9,6 +9,17 @@
 
 #define arrayLength(array) sizeof(array) / sizeof(array[0])
 
+static inline size_t megabytes(size_t value)
+{
+	return value * 1024 * 1024;
+}
+
+static inline size_t permMemoryBlockSize()
+{
+	//return megabytes(64);
+	return 1500;
+}
+
 bool memoryStackInit(MemoryStack& stack, size_t initialSize)
 {
 	assert(initialSize > 0);
@@ -44,8 +55,27 @@ static void memoryStackExtend(LinkedMemoryStack& stack, size_t requiredSpace)
 	stack = extension;
 }
 
+inline void* permMemoryPush(MemoryStack& stack, size_t size)
+{
+	assert(size < permMemoryBlockSize());
+
+	size_t remainingSize = stack.end - stack.top;
+	if (remainingSize < size)
+	{
+		// Yes, reinitializing the memory "leaks" it, in that we never give it back to the
+		// heap while this application is alive. But this is permanent memory. We want to
+		// keep it around until the application is closed; and after it closes, this OS will
+		// clean up all our memory in one fell swoop anyways.
+		memoryStackInit(stack, permMemoryBlockSize());
+	}
+
+	auto result = stack.top;
+	stack.top += size;
+	return result;
+}
+
 //TODO memory alignment
-inline void* memoryStackPush(LinkedMemoryStack& stack, size_t size)
+inline void* scratchMemoryPush(LinkedMemoryStack& stack, size_t size)
 {
 	size_t remainingSize = stack.stack.end - stack.stack.top;
 	if (size > remainingSize)
@@ -386,18 +416,13 @@ void destroyApplication(ApplicationState& appState)
 	glDeleteProgram(appState.userRenderConfig.program);
 }
 
-static inline size_t megabytes(size_t value)
-{
-	return value * 1024 * 1024;
-}
-
 bool initApplication(ApplicationState& appState)
 {
 	if (!memoryStackInit(appState.scratchMemory.stack, sizeof(LinkedMemoryStack)))
 	{
 		return false;
 	}
-	appState.scratchMemory.next = nullptr;
+	appState.permMemory = {};
 
 	glGenTextures(1, &appState.textRenderConfig.texture);
 	glGenSamplers(1, &appState.textRenderConfig.textureSampler);
@@ -632,54 +657,155 @@ static inline void processKeyBuffer(ApplicationState& appState)
 	}
 }
 
+void freeInfoLogTextChunks(InfoLogTextChunk*& chunks, InfoLogTextChunk*& freeList)
+{
+	while (chunks != nullptr)
+	{
+		auto freed = chunks;
+		chunks = chunks->next;
+		freed->next = freeList;
+		freeList = freed;
+	}
+}
+
+static void copyLogToTextChunks(
+	MemoryStack& permMemory,
+	InfoLogTextChunk*& result,
+	InfoLogTextChunk*& freeList,
+	GLchar* log,
+	GLint logLength)
+{
+	result = nullptr;
+	for (;;)
+	{
+		InfoLogTextChunk *textChunk;
+		if (freeList == nullptr)
+		{
+			textChunk = (InfoLogTextChunk*) permMemoryPush(permMemory, sizeof(InfoLogTextChunk));
+		} else
+		{
+			textChunk = freeList;
+			freeList = freeList->next;
+		}
+		textChunk->next = result;
+		result = textChunk;
+
+		auto chunkSize = (u32) sizeof(result->text);
+		if ((u32) logLength < chunkSize)
+		{
+			result->count = logLength;
+			memcpy(result->text, log, logLength);
+			return;
+		} else
+		{
+			result->count = chunkSize;
+			memcpy(result->text, log, chunkSize);
+			logLength -= chunkSize;
+			log += chunkSize;
+		}
+	}
+}
+
+void readShaderLog(
+	MemoryStack& permMemory,
+	LinkedMemoryStack& scratchMemory,
+	GLint shader,
+	InfoLogTextChunk*& result,
+	InfoLogTextChunk*& freeList)
+{
+	GLint logLength;
+	glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &logLength);
+
+	auto log = (GLchar*) scratchMemoryPush(scratchMemory, (logLength + 1) * sizeof(GLchar));
+	GLsizei readLogLength;
+	glGetShaderInfoLog(shader, logLength, &readLogLength, log);
+
+	copyLogToTextChunks(permMemory, result, freeList, log, logLength);
+}
+
+void readProgramLog(
+	MemoryStack& permMemory,
+	LinkedMemoryStack& scratchMemory,
+	GLint program,
+	InfoLogTextChunk*& result,
+	InfoLogTextChunk*& freeList)
+{
+	GLint logLength;
+	glGetProgramiv(program, GL_INFO_LOG_LENGTH, &logLength);
+
+	auto log = (GLchar*) scratchMemoryPush(scratchMemory, (logLength + 1) * sizeof(GLchar));
+	GLsizei readLogLength;
+	glGetProgramInfoLog(program, logLength, &readLogLength, log);
+
+	copyLogToTextChunks(permMemory, result, freeList, log, logLength);
+}
+
+void loadUserShader(
+	MemoryStack& permMemory,
+	LinkedMemoryStack& scratchMemory,
+	GLint shader,
+	FilePath shaderPath,
+	InfoLogTextChunk*& errorLog,
+	InfoLogTextChunk*& errorLogFreeList)
+{
+	freeInfoLogTextChunks(errorLog, errorLogFreeList);
+
+	size_t fileSize;
+	auto fileContents = PLATFORM_readWholeFile(scratchMemory, shaderPath, fileSize);
+//TODO there is no guarantee that fileSize is big enough to fit in a GLint - bulletproof this
+	auto fileSizeTruncated = (GLint) fileSize;
+	if (fileContents == nullptr)
+	{
+		return;
+	}
+
+	glShaderSource(shader, 1, (GLchar**) &fileContents, &fileSizeTruncated);
+	glCompileShader(shader);
+	if (!shaderCompileSuccessful(shader))
+	{
+		readShaderLog(permMemory, scratchMemory, shader, errorLog, errorLogFreeList);
+	}
+}
+
 void loadUserRenderConfig(
-	LinkedMemoryStack& stack,
+	MemoryStack& permMemory,
+	LinkedMemoryStack& scratchMemory,
 	FilePath vertShaderPath,
 	FilePath fragShaderPath,
-	UserRenderConfig const& renderConfig)
+	UserRenderConfig const& renderConfig,
+	InfoLogErrors& infoLogErrors)
 {
-	size_t fileSize;
-
-	bool success = true;
-
+	loadUserShader(
+		permMemory,
+		scratchMemory,
+		renderConfig.vertShader,
+		vertShaderPath,
+		infoLogErrors.vertShaderErrors,
+		infoLogErrors.freeList);
+	loadUserShader(
+		permMemory,
+		scratchMemory,
+		renderConfig.fragShader,
+		fragShaderPath,
+		infoLogErrors.fragShaderErrors,
+		infoLogErrors.freeList);
+	if (infoLogErrors.vertShaderErrors != nullptr
+		|| infoLogErrors.fragShaderErrors != nullptr)
 	{
-		auto fileContents = PLATFORM_readWholeFile(stack, vertShaderPath, fileSize);
-//TODO there is no guarantee that fileSize is big enough to fit in a GLint - bulletproof this
-		auto fileSizeTruncated = (GLint) fileSize;
-		if (fileContents)
-		{
-			glShaderSource(renderConfig.vertShader, 1, (GLchar**) &fileContents, &fileSizeTruncated);
-			glCompileShader(renderConfig.vertShader);
-			assert(shaderCompileSuccessful(renderConfig.vertShader));
-		} else
-		{
-			success = false;
-		}
-	}
-
-	{
-		auto fileContents = PLATFORM_readWholeFile(stack, fragShaderPath, fileSize);
-//TODO there is no guarantee that fileSize is big enough to fit in a GLint - bulletproof this
-		auto fileSizeTruncated = (GLint) fileSize;
-		if (fileContents)
-		{
-			glShaderSource(renderConfig.fragShader, 1, (GLchar**) &fileContents, &fileSizeTruncated);
-			glCompileShader(renderConfig.fragShader);
-			assert(shaderCompileSuccessful(renderConfig.fragShader));
-		} else
-		{
-			success = false;
-		}
-	}
-
-	if (!success)
-	{
-		assert(false);
 		return;
 	}
 	
 	glLinkProgram(renderConfig.program);
-	assert(programLinkSuccessful(renderConfig.program));
+	if (!programLinkSuccessful(renderConfig.program))
+	{
+		freeInfoLogTextChunks(infoLogErrors.programErrors, infoLogErrors.freeList);
+		readProgramLog(
+			permMemory,
+			scratchMemory,
+			renderConfig.program,
+			infoLogErrors.programErrors,
+			infoLogErrors.freeList);
+	}
 }
 
 void updateApplication(ApplicationState& appState)
@@ -688,10 +814,12 @@ void updateApplication(ApplicationState& appState)
 	if (appState.loadUserRenderConfig)
 	{
 		loadUserRenderConfig(
+			appState.permMemory,
 			appState.scratchMemory,
 			appState.userVertShaderPath,
 			appState.userFragShaderPath,
-			appState.userRenderConfig);
+			appState.userRenderConfig,
+			appState.infoLogErrors);
 		appState.loadUserRenderConfig = false;
 	}
 

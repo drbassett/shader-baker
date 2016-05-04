@@ -26,7 +26,7 @@ u8* PLATFORM_readWholeFile(LinkedMemoryStack& stack, FilePath const filePath, si
 	HANDLE fileHandle;
 	{
 		auto filePathLength = stringSliceLength(filePath.path);
-		auto fileNameCString = (char*) memoryStackPush(stack, filePathLength + 1);
+		auto fileNameCString = (char*) scratchMemoryPush(stack, filePathLength + 1);
 		memcpy(fileNameCString, filePath.path.begin, filePathLength);
 		fileNameCString[filePathLength] = 0;
 		fileHandle = CreateFileA(fileNameCString, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
@@ -46,7 +46,7 @@ u8* PLATFORM_readWholeFile(LinkedMemoryStack& stack, FilePath const filePath, si
 		fileSize = size.QuadPart;
 	}
 
-	auto result = (u8*) memoryStackPush(stack, fileSize);
+	auto result = (u8*) scratchMemoryPush(stack, fileSize);
 
 	DWORD bytesRead;
 	auto readPtr = result;
@@ -92,7 +92,7 @@ bool getFileWriteTime(LinkedMemoryStack& stack, FilePath const filePath, FILETIM
 	HANDLE fileHandle;
 	{
 		auto filePathLength = stringSliceLength(filePath.path);
-		auto fileNameCString = (char*) memoryStackPush(stack, filePathLength + 1);
+		auto fileNameCString = (char*) scratchMemoryPush(stack, filePathLength + 1);
 		memcpy(fileNameCString, filePath.path.begin, filePathLength);
 		fileNameCString[filePathLength] = 0;
 		fileHandle = CreateFileA(fileNameCString, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
