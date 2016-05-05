@@ -108,9 +108,6 @@ struct ApplicationState
 
 	unsigned windowWidth, windowHeight;
 
-	size_t textLineCount;
-	TextLine* textLines;
-
 	char commandLine[256];
 	size_t commandLineLength, commandLineCapacity;
 

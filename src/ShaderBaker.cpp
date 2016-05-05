@@ -8,6 +8,7 @@
 #include "Platform.h"
 
 #define arrayLength(array) sizeof(array) / sizeof(array[0])
+#define scratchMemPushType(mem, type) (type*) scratchMemoryPush(mem, sizeof(type))
 
 static inline size_t megabytes(size_t value)
 {
@@ -523,34 +524,42 @@ static bool operator==(StringSlice lhs, const char* rhs)
 	}
 }
 
-static void drawText(ApplicationState& appState)
+static void drawText(
+	TextRenderConfig const& textRenderConfig,
+	AsciiFont& font,
+	unsigned windowWidth,
+	unsigned windowHeight,
+	TextLine *textLinesBegin,
+	TextLine *textLinesEnd)
 {
-	auto textLines = appState.textLines;
-	auto lineCount = appState.textLineCount;
-
 	size_t charCount = 0;
-	for (int i = 0; i < lineCount; ++i)
+	auto pTextLine = textLinesBegin;
+	while (pTextLine != textLinesEnd)
 	{
-		charCount += stringSliceLength(textLines[i].text);
+		charCount += stringSliceLength(pTextLine->text);
+		++pTextLine;
 	}
 
 	auto charDataBufferSize = charCount * sizeof(GLuint) * 3;
-	glBindBuffer(GL_ARRAY_BUFFER, appState.textRenderConfig.charDataBuffer);
+	glBindBuffer(GL_ARRAY_BUFFER, textRenderConfig.charDataBuffer);
 	glBufferData(GL_ARRAY_BUFFER, charDataBufferSize, 0, GL_STREAM_DRAW);
+	pTextLine = textLinesBegin;
 	auto pCharData = (GLuint*) glMapBuffer(GL_ARRAY_BUFFER, GL_WRITE_ONLY);
-	for (int i = 0; i < lineCount; ++i)
+	while (pTextLine != textLinesEnd)
 	{
-		auto line = textLines[i];
-		auto cPtr = line.text.begin;
-		auto charX = line.leftEdge;
+		auto cPtr = pTextLine->text.begin;
+		auto cPtrEnd = pTextLine->text.end;
+		auto charX = pTextLine->leftEdge;
+		auto baseline = pTextLine->baseline;
+		++pTextLine;
 
-		while (cPtr != line.text.end)
+		while (cPtr != cPtrEnd)
 		{
 			auto c = *cPtr;
-			auto glyphMetrics = appState.font.glyphMetrics[c];
+			auto glyphMetrics = font.glyphMetrics[c];
 
 			pCharData[0] = charX + glyphMetrics.offsetLeft;
-			pCharData[1] = line.baseline - glyphMetrics.offsetTop;
+			pCharData[1] = baseline - glyphMetrics.offsetTop;
 			pCharData[2] = c;
 
 			charX += glyphMetrics.advanceX;
@@ -569,27 +578,27 @@ static void drawText(ApplicationState& appState)
 		return;
 	}
 
-	glBindBuffer(GL_ARRAY_BUFFER, appState.textRenderConfig.charDataBuffer);
-	glBindVertexArray(appState.textRenderConfig.vao);
-	glUseProgram(appState.textRenderConfig.program);
+	glBindBuffer(GL_ARRAY_BUFFER, textRenderConfig.charDataBuffer);
+	glBindVertexArray(textRenderConfig.vao);
+	glUseProgram(textRenderConfig.program);
 
 	glUniform2f(
-		appState.textRenderConfig.unifViewportSizePx,
-		(GLfloat) appState.windowWidth,
-		(GLfloat) appState.windowHeight);
+		textRenderConfig.unifViewportSizePx,
+		(GLfloat) windowWidth,
+		(GLfloat) windowHeight);
 	glUniform2f(
-		appState.textRenderConfig.unifCharacterSizePx,
-		(float) appState.font.bitmapWidth,
-		(float) appState.font.bitmapHeight);
+		textRenderConfig.unifCharacterSizePx,
+		(float) font.bitmapWidth,
+		(float) font.bitmapHeight);
 
-	glActiveTexture(GL_TEXTURE0 + appState.textRenderConfig.textureUnit);
-	glBindTexture(GL_TEXTURE_2D_ARRAY, appState.textRenderConfig.texture);
+	glActiveTexture(GL_TEXTURE0 + textRenderConfig.textureUnit);
+	glBindTexture(GL_TEXTURE_2D_ARRAY, textRenderConfig.texture);
 	glBindSampler(
-		appState.textRenderConfig.textureUnit,
-		appState.textRenderConfig.textureSampler);
+		textRenderConfig.textureUnit,
+		textRenderConfig.textureSampler);
 	glUniform1i(
-		appState.textRenderConfig.unifCharacterSampler,
-		appState.textRenderConfig.textureUnit);
+		textRenderConfig.unifCharacterSampler,
+		textRenderConfig.textureUnit);
 
 	glEnable(GL_BLEND);
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -826,16 +835,16 @@ void updateApplication(ApplicationState& appState)
 	auto windowWidth = (i32) appState.windowWidth;
 	auto windowHeight = (i32) appState.windowHeight;
 
-	TextLine textLines[1];
-
-	textLines[0] = {};
-	textLines[0].leftEdge = 5;
-	textLines[0].baseline = windowHeight - 20;
-	textLines[0].text.begin = appState.commandLine;
-	textLines[0].text.end = appState.commandLine + appState.commandLineLength;
-
-	appState.textLineCount = arrayLength(textLines);
-	appState.textLines = textLines;
+//TODO it is not safe to assume that multiple pushes are contiguous in memory
+	auto textLinesBegin = (TextLine*) appState.scratchMemory.stack.top;
+	{
+		auto commandLineText = scratchMemPushType(appState.scratchMemory, TextLine);
+		commandLineText->leftEdge = 5;
+		commandLineText->baseline = windowHeight - 20;
+		commandLineText->text.begin = appState.commandLine;
+		commandLineText->text.end = appState.commandLine + appState.commandLineLength;
+	}
+	auto textLinesEnd = (TextLine*) appState.scratchMemory.stack.top;
 
 	i32 commandInputAreaHeight = 30;
 	i32 commandInputAreaBottom = windowHeight - commandInputAreaHeight;
@@ -863,7 +872,7 @@ void updateApplication(ApplicationState& appState)
 	glDisable(GL_SCISSOR_TEST);
 
 	glViewport(0, 0, windowWidth, windowHeight);
-	drawText(appState);
+	drawText(appState.textRenderConfig, appState.font, appState.windowWidth, appState.windowHeight, textLinesBegin, textLinesEnd);
 
 	glViewport(
 		previewArea.min.x,
