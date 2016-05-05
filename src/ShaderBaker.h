@@ -1,20 +1,13 @@
 #pragma once
 
-struct MemoryStack
+struct MemStack
 {
-	u8 *begin, *end, *top;
+	u8 *begin, *top, *end;
 };
 
-struct LinkedMemoryStack
+struct MemStackMarker
 {
-	MemoryStack stack;
-	LinkedMemoryStack *next;
-};
-
-struct MemoryStackMarker
-{
-	// this field cannot be a pointer since memory stacks can be reallocated
-	size_t index;
+	u8 *p;
 };
 
 struct StringSlice
@@ -90,8 +83,7 @@ struct InfoLogErrors
 
 struct ApplicationState
 {
-	MemoryStack permMemory;
-	LinkedMemoryStack scratchMemory;
+	MemStack permMem, scratchMem;
 
 	AsciiFont font;
 

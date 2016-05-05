@@ -21,12 +21,12 @@ inline bool PLATFORM_free(void* memory)
 	return VirtualFree(memory, NULL, MEM_RELEASE) != 0;
 }
 
-u8* PLATFORM_readWholeFile(LinkedMemoryStack& stack, FilePath const filePath, size_t& fileSize)
+u8* PLATFORM_readWholeFile(MemStack& scratchMem, FilePath const filePath, size_t& fileSize)
 {
 	HANDLE fileHandle;
 	{
 		auto filePathLength = stringSliceLength(filePath.path);
-		auto fileNameCString = (char*) scratchMemoryPush(stack, filePathLength + 1);
+		auto fileNameCString = memStackPushArray(scratchMem, char, filePathLength + 1);
 		memcpy(fileNameCString, filePath.path.begin, filePathLength);
 		fileNameCString[filePathLength] = 0;
 		fileHandle = CreateFileA(fileNameCString, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
@@ -46,7 +46,7 @@ u8* PLATFORM_readWholeFile(LinkedMemoryStack& stack, FilePath const filePath, si
 		fileSize = size.QuadPart;
 	}
 
-	auto result = (u8*) scratchMemoryPush(stack, fileSize);
+	auto result = memStackPushArray(scratchMem, u8, fileSize);
 
 	DWORD bytesRead;
 	auto readPtr = result;
@@ -87,12 +87,12 @@ bool fileTimesEqual(FILETIME lhs, FILETIME rhs)
 	return lhs.dwLowDateTime == rhs.dwLowDateTime && lhs.dwHighDateTime == rhs.dwHighDateTime;
 }
 
-bool getFileWriteTime(LinkedMemoryStack& stack, FilePath const filePath, FILETIME& writeTime)
+bool getFileWriteTime(MemStack& scratchMem, FilePath const filePath, FILETIME& writeTime)
 {
 	HANDLE fileHandle;
 	{
 		auto filePathLength = stringSliceLength(filePath.path);
-		auto fileNameCString = (char*) scratchMemoryPush(stack, filePathLength + 1);
+		auto fileNameCString = memStackPushArray(scratchMem, char, filePathLength + 1);
 		memcpy(fileNameCString, filePath.path.begin, filePathLength);
 		fileNameCString[filePathLength] = 0;
 		fileHandle = CreateFileA(fileNameCString, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
@@ -437,20 +437,26 @@ int CALLBACK WinMain(
 			DispatchMessageA(&message);
 		}
 
-		FILETIME nextVertShaderWriteTime = {};
-		if (getFileWriteTime(appState.scratchMemory, userVertShaderPath, nextVertShaderWriteTime)
-			&& !fileTimesEqual(nextVertShaderWriteTime, lastVertShaderWriteTime))
 		{
-			lastVertShaderWriteTime = nextVertShaderWriteTime;
-			appState.loadUserRenderConfig = true;
-		}
+			auto memMarker = memStackMark(appState.scratchMem);
 
-		FILETIME nextFragShaderWriteTime = {};
-		if (getFileWriteTime(appState.scratchMemory, userFragShaderPath, nextFragShaderWriteTime)
-			&& !fileTimesEqual(nextFragShaderWriteTime, lastFragShaderWriteTime))
-		{
-			lastFragShaderWriteTime = nextFragShaderWriteTime;
-			appState.loadUserRenderConfig = true;
+			FILETIME nextVertShaderWriteTime = {};
+			if (getFileWriteTime(appState.scratchMem, userVertShaderPath, nextVertShaderWriteTime)
+				&& !fileTimesEqual(nextVertShaderWriteTime, lastVertShaderWriteTime))
+			{
+				lastVertShaderWriteTime = nextVertShaderWriteTime;
+				appState.loadUserRenderConfig = true;
+			}
+
+			FILETIME nextFragShaderWriteTime = {};
+			if (getFileWriteTime(appState.scratchMem, userFragShaderPath, nextFragShaderWriteTime)
+				&& !fileTimesEqual(nextFragShaderWriteTime, lastFragShaderWriteTime))
+			{
+				lastFragShaderWriteTime = nextFragShaderWriteTime;
+				appState.loadUserRenderConfig = true;
+			}
+
+			memStackPop(appState.scratchMem, memMarker);
 		}
 
 		LARGE_INTEGER qpcTime;

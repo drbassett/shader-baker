@@ -8,124 +8,50 @@
 #include "Platform.h"
 
 #define arrayLength(array) sizeof(array) / sizeof(array[0])
-#define scratchMemPushType(mem, type) (type*) scratchMemoryPush(mem, sizeof(type))
+#define memStackPushType(mem, type) (type*) memStackPush(mem, sizeof(type))
+#define memStackPushArray(mem, type, size) (type*) memStackPush(mem, (size) * sizeof(type))
 
-static inline size_t megabytes(size_t value)
+static bool memStackInit(MemStack& stack, size_t capacity)
 {
-	return value * 1024 * 1024;
-}
-
-static inline size_t permMemoryBlockSize()
-{
-	//return megabytes(64);
-	return 1500;
-}
-
-bool memoryStackInit(MemoryStack& stack, size_t initialSize)
-{
-	assert(initialSize > 0);
+	assert(capacity > 0);
 	
-	auto memory = (u8*) PLATFORM_alloc(initialSize);
+	auto memory = (u8*) PLATFORM_alloc(capacity);
 	if (memory == nullptr)
 	{
 		return false;
 	}
 
 	stack.begin = memory;
-	stack.end = memory + initialSize;
 	stack.top = memory;
+	stack.end = memory + capacity;
 	return true;
 }
 
-static void memoryStackExtend(LinkedMemoryStack& stack, size_t requiredSpace)
-{
-	size_t currentSize = stack.stack.end - stack.stack.begin;
-//TODO handle overflow
-	size_t extensionSize = (currentSize << 1);
-	requiredSpace += sizeof(LinkedMemoryStack);
-	if (requiredSpace > extensionSize)
-	{
-		extensionSize = requiredSpace;
-	}
-
-	LinkedMemoryStack extension = {};
-	memoryStackInit(extension.stack, extensionSize);
-	extension.next = (LinkedMemoryStack*) extension.stack.begin;
-	extension.stack.top += sizeof(LinkedMemoryStack);
-	*extension.next = stack;
-	stack = extension;
-}
-
-inline void* permMemoryPush(MemoryStack& stack, size_t size)
-{
-	assert(size < permMemoryBlockSize());
-
-	size_t remainingSize = stack.end - stack.top;
-	if (remainingSize < size)
-	{
-		// Yes, reinitializing the memory "leaks" it, in that we never give it back to the
-		// heap while this application is alive. But this is permanent memory. We want to
-		// keep it around until the application is closed; and after it closes, this OS will
-		// clean up all our memory in one fell swoop anyways.
-		memoryStackInit(stack, permMemoryBlockSize());
-	}
-
-	auto result = stack.top;
-	stack.top += size;
-	return result;
-}
-
 //TODO memory alignment
-inline void* scratchMemoryPush(LinkedMemoryStack& stack, size_t size)
+inline void* memStackPush(MemStack& mem, size_t size)
 {
-	size_t remainingSize = stack.stack.end - stack.stack.top;
-	if (size > remainingSize)
-	{
-		memoryStackExtend(stack, size);
-	}
-
-	auto result = stack.stack.top;
-	stack.stack.top += size;
+	size_t remainingSize = mem.end - mem.top;
+//TODO figure out how to "gracefully crash" the application if memory runs out
+	assert(size <= remainingSize);
+	auto result = mem.top;
+ 	mem.top += size;
 	return result;
 }
 
-inline void memoryStackClear(LinkedMemoryStack& stack)
+inline MemStackMarker memStackMark(MemStack const& mem)
 {
-	stack.stack.top = stack.stack.begin;
+	return MemStackMarker{mem.top};
 }
 
-static void coalesceLinkedMemoryStacks(LinkedMemoryStack& head)
+inline void memStackPop(MemStack& mem, MemStackMarker marker)
 {
-	if (head.next == nullptr)
-	{
-		memoryStackClear(head);
-		return;
-	}
+	assert(marker.p >= mem.begin && marker.p < mem.end);
+	mem.top = marker.p;
+}
 
-//TODO handle overflow
-	size_t totalSize = 0;
-	{
-		LinkedMemoryStack link = head;
-		for (;;)
-		{
-			auto stackBegin = link.stack.begin;
-			totalSize += link.stack.end - stackBegin;
-			auto next = link.next;
-			if (next == nullptr)
-			{
-				break;
-			}
-			link = *next;
-
-			auto freed = PLATFORM_free(stackBegin);
-			assert(freed);
-		}
-		auto freed = PLATFORM_free(link.stack.begin);
-		assert(freed);
-	}
-
-	memoryStackInit(head.stack, totalSize);
-	head.next = nullptr;
+inline void memStackClear(MemStack& mem)
+{
+	mem.top = mem.begin;
 }
 
 inline size_t stringSliceLength(StringSlice str)
@@ -417,13 +343,21 @@ void destroyApplication(ApplicationState& appState)
 	glDeleteProgram(appState.userRenderConfig.program);
 }
 
+static inline size_t megabytes(size_t value)
+{
+	return value * 1024 * 1024;
+}
+
 bool initApplication(ApplicationState& appState)
 {
-	if (!memoryStackInit(appState.scratchMemory.stack, sizeof(LinkedMemoryStack)))
+	if (!memStackInit(appState.permMem, megabytes(64)))
 	{
 		return false;
 	}
-	appState.permMemory = {};
+	if (!memStackInit(appState.scratchMem, megabytes(256)))
+	{
+		return false;
+	}
 
 	glGenTextures(1, &appState.textRenderConfig.texture);
 	glGenSamplers(1, &appState.textRenderConfig.textureSampler);
@@ -678,7 +612,7 @@ void freeInfoLogTextChunks(InfoLogTextChunk*& chunks, InfoLogTextChunk*& freeLis
 }
 
 static void copyLogToTextChunks(
-	MemoryStack& permMemory,
+	MemStack& permMem,
 	InfoLogTextChunk*& result,
 	InfoLogTextChunk*& freeList,
 	GLchar* log,
@@ -690,7 +624,7 @@ static void copyLogToTextChunks(
 		InfoLogTextChunk *textChunk;
 		if (freeList == nullptr)
 		{
-			textChunk = (InfoLogTextChunk*) permMemoryPush(permMemory, sizeof(InfoLogTextChunk));
+			textChunk = memStackPushType(permMem, InfoLogTextChunk);
 		} else
 		{
 			textChunk = freeList;
@@ -716,8 +650,8 @@ static void copyLogToTextChunks(
 }
 
 void readShaderLog(
-	MemoryStack& permMemory,
-	LinkedMemoryStack& scratchMemory,
+	MemStack& permMem,
+	MemStack& scratchMem,
 	GLint shader,
 	InfoLogTextChunk*& result,
 	InfoLogTextChunk*& freeList)
@@ -725,16 +659,16 @@ void readShaderLog(
 	GLint logLength;
 	glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &logLength);
 
-	auto log = (GLchar*) scratchMemoryPush(scratchMemory, (logLength + 1) * sizeof(GLchar));
+	auto log = memStackPushArray(scratchMem, GLchar, logLength + 1);
 	GLsizei readLogLength;
 	glGetShaderInfoLog(shader, logLength, &readLogLength, log);
 
-	copyLogToTextChunks(permMemory, result, freeList, log, logLength);
+	copyLogToTextChunks(permMem, result, freeList, log, logLength);
 }
 
 void readProgramLog(
-	MemoryStack& permMemory,
-	LinkedMemoryStack& scratchMemory,
+	MemStack& permMem,
+	MemStack& scratchMem,
 	GLint program,
 	InfoLogTextChunk*& result,
 	InfoLogTextChunk*& freeList)
@@ -742,16 +676,16 @@ void readProgramLog(
 	GLint logLength;
 	glGetProgramiv(program, GL_INFO_LOG_LENGTH, &logLength);
 
-	auto log = (GLchar*) scratchMemoryPush(scratchMemory, (logLength + 1) * sizeof(GLchar));
+	auto log = memStackPushArray(scratchMem, GLchar, logLength + 1);
 	GLsizei readLogLength;
 	glGetProgramInfoLog(program, logLength, &readLogLength, log);
 
-	copyLogToTextChunks(permMemory, result, freeList, log, logLength);
+	copyLogToTextChunks(permMem, result, freeList, log, logLength);
 }
 
 void loadUserShader(
-	MemoryStack& permMemory,
-	LinkedMemoryStack& scratchMemory,
+	MemStack& permMem,
+	MemStack& scratchMem,
 	GLint shader,
 	FilePath shaderPath,
 	InfoLogTextChunk*& errorLog,
@@ -760,7 +694,7 @@ void loadUserShader(
 	freeInfoLogTextChunks(errorLog, errorLogFreeList);
 
 	size_t fileSize;
-	auto fileContents = PLATFORM_readWholeFile(scratchMemory, shaderPath, fileSize);
+	auto fileContents = PLATFORM_readWholeFile(scratchMem, shaderPath, fileSize);
 //TODO there is no guarantee that fileSize is big enough to fit in a GLint - bulletproof this
 	auto fileSizeTruncated = (GLint) fileSize;
 	if (fileContents == nullptr)
@@ -772,28 +706,30 @@ void loadUserShader(
 	glCompileShader(shader);
 	if (!shaderCompileSuccessful(shader))
 	{
-		readShaderLog(permMemory, scratchMemory, shader, errorLog, errorLogFreeList);
+		readShaderLog(permMem, scratchMem, shader, errorLog, errorLogFreeList);
 	}
 }
 
 void loadUserRenderConfig(
-	MemoryStack& permMemory,
-	LinkedMemoryStack& scratchMemory,
+	MemStack& permMem,
+	MemStack& scratchMem,
 	FilePath vertShaderPath,
 	FilePath fragShaderPath,
 	UserRenderConfig const& renderConfig,
 	InfoLogErrors& infoLogErrors)
 {
+	auto memMarker = memStackMark(scratchMem);
+
 	loadUserShader(
-		permMemory,
-		scratchMemory,
+		permMem,
+		scratchMem,
 		renderConfig.vertShader,
 		vertShaderPath,
 		infoLogErrors.vertShaderErrors,
 		infoLogErrors.freeList);
 	loadUserShader(
-		permMemory,
-		scratchMemory,
+		permMem,
+		scratchMem,
 		renderConfig.fragShader,
 		fragShaderPath,
 		infoLogErrors.fragShaderErrors,
@@ -809,12 +745,14 @@ void loadUserRenderConfig(
 	{
 		freeInfoLogTextChunks(infoLogErrors.programErrors, infoLogErrors.freeList);
 		readProgramLog(
-			permMemory,
-			scratchMemory,
+			permMem,
+			scratchMem,
 			renderConfig.program,
 			infoLogErrors.programErrors,
 			infoLogErrors.freeList);
 	}
+
+	memStackPop(scratchMem, memMarker);
 }
 
 void updateApplication(ApplicationState& appState)
@@ -823,8 +761,8 @@ void updateApplication(ApplicationState& appState)
 	if (appState.loadUserRenderConfig)
 	{
 		loadUserRenderConfig(
-			appState.permMemory,
-			appState.scratchMemory,
+			appState.permMem,
+			appState.scratchMem,
 			appState.userVertShaderPath,
 			appState.userFragShaderPath,
 			appState.userRenderConfig,
@@ -834,17 +772,6 @@ void updateApplication(ApplicationState& appState)
 
 	auto windowWidth = (i32) appState.windowWidth;
 	auto windowHeight = (i32) appState.windowHeight;
-
-//TODO it is not safe to assume that multiple pushes are contiguous in memory
-	auto textLinesBegin = (TextLine*) appState.scratchMemory.stack.top;
-	{
-		auto commandLineText = scratchMemPushType(appState.scratchMemory, TextLine);
-		commandLineText->leftEdge = 5;
-		commandLineText->baseline = windowHeight - 20;
-		commandLineText->text.begin = appState.commandLine;
-		commandLineText->text.end = appState.commandLine + appState.commandLineLength;
-	}
-	auto textLinesEnd = (TextLine*) appState.scratchMemory.stack.top;
 
 	i32 commandInputAreaHeight = 30;
 	i32 commandInputAreaBottom = windowHeight - commandInputAreaHeight;
@@ -866,13 +793,31 @@ void updateApplication(ApplicationState& appState)
 	bool useDarkCommandAreaColor = appState.currentTime.value % blinkPeriod < halfBlinkPeriod;
 	auto commandAreaColor = useDarkCommandAreaColor ? commandAreaColorDark : commandAreaColorLight;
 
+	auto memMarker = memStackMark(appState.scratchMem);
+
+	auto textLinesBegin = (TextLine*) appState.scratchMem.top;
+	{
+		auto commandLineText = memStackPushType(appState.scratchMem, TextLine);
+		commandLineText->leftEdge = 5;
+		commandLineText->baseline = windowHeight - 20;
+		commandLineText->text.begin = appState.commandLine;
+		commandLineText->text.end = appState.commandLine + appState.commandLineLength;
+	}
+	auto textLinesEnd = (TextLine*) appState.scratchMem.top;
+
 	glEnable(GL_SCISSOR_TEST);
 	fillRectangle(previewArea, cornflowerBlue);
 	fillRectangle(commandInputArea, commandAreaColor);
 	glDisable(GL_SCISSOR_TEST);
 
 	glViewport(0, 0, windowWidth, windowHeight);
-	drawText(appState.textRenderConfig, appState.font, appState.windowWidth, appState.windowHeight, textLinesBegin, textLinesEnd);
+	drawText(
+		appState.textRenderConfig,
+		appState.font,
+		appState.windowWidth,
+		appState.windowHeight,
+		textLinesBegin,
+		textLinesEnd);
 
 	glViewport(
 		previewArea.min.x,
@@ -883,6 +828,9 @@ void updateApplication(ApplicationState& appState)
 	glUseProgram(appState.userRenderConfig.program);
 	glDrawArrays(GL_TRIANGLES, 0, 3);
 
-	coalesceLinkedMemoryStacks(appState.scratchMemory);
+	memStackPop(appState.scratchMem, memMarker);
+
+	assert(appState.scratchMem.top == appState.scratchMem.begin);
+	memStackClear(appState.scratchMem);
 }
 
