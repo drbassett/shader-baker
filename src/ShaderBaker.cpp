@@ -277,7 +277,8 @@ static inline void initUserRenderConfig(UserRenderConfig& userRenderConfig)
 	assert(programLinkSuccessful(userRenderConfig.program));
 }
 
-static inline bool readFontFile(ApplicationState& appState, const char *fileName)
+static inline bool readFontFile(
+	MemStack& scratchMem, TextRenderConfig& textRenderConfig, AsciiFont& font, const char *fileName)
 {
 	auto fontFile = fopen(fileName, "rb");
 	if (!fontFile)
@@ -286,47 +287,48 @@ static inline bool readFontFile(ApplicationState& appState, const char *fileName
 		return false;
 	}
 
-	bool result = true;
+	bool success = true;
 
-	fread(&appState.font, sizeof(appState.font), 1, fontFile);
-	auto bitmapSize = appState.font.bitmapWidth * appState.font.bitmapHeight;
+	auto memMarker = memStackMark(scratchMem);
+
+//TODO replace fread with a platform-specific calls
+	fread(&font, sizeof(font), 1, fontFile);
+	auto bitmapSize = font.bitmapWidth * font.bitmapHeight;
 	auto bitmapStorageSize = bitmapSize * 256;
-//TODO consider using a fixed size buffer on the stack and uploading the texture in chunks
-	auto bitmapStorage = (u8*) malloc(bitmapStorageSize);
+	auto bitmapStorage = (u8*) memStackPush(scratchMem, bitmapStorageSize);
 	if (bitmapStorage == nullptr)
 	{
 		puts("Not enough memory to read font file");
-		goto cleanup1;
+		success = false;
+		goto returnResult;
 	}
 	fread(bitmapStorage, 1, bitmapStorageSize, fontFile);
 
 	if (ferror(fontFile))
 	{
 		perror("ERROR: failed to read font file");
-		goto cleanup2;
+		success = false;
+		goto returnResult;
 	}
 
-	//NOTE glMapBuffer with GL_PIXEL_UNPACK_BUFFER can be used to updload textures. It probably
-	// will not have any advantage in this situtation, however.
-	glBindTexture(GL_TEXTURE_2D_ARRAY, appState.textRenderConfig.texture);
-	glTexStorage3D(GL_TEXTURE_2D_ARRAY, 1, GL_RGBA8, appState.font.bitmapWidth, appState.font.bitmapHeight, 256);
+	glBindTexture(GL_TEXTURE_2D_ARRAY, textRenderConfig.texture);
+	glTexStorage3D(GL_TEXTURE_2D_ARRAY, 1, GL_RGBA8, font.bitmapWidth, font.bitmapHeight, 256);
 	glTexSubImage3D(
 		GL_TEXTURE_2D_ARRAY,
 		0,
 		0, 0, 0,
-		appState.font.bitmapWidth, appState.font.bitmapHeight, 256,
+		font.bitmapWidth, font.bitmapHeight, 256,
 		GL_RED,
 		GL_UNSIGNED_BYTE,
 		bitmapStorage);
 
-cleanup2:
-	free(bitmapStorage);
-cleanup1:
+returnResult:
 	if (fclose(fontFile) != 0)
 	{
 		perror("WARNING: failed to close output file");
 	}
-	return result;
+	memStackPop(scratchMem, memMarker);
+	return success;
 }
 
 void destroyApplication(ApplicationState& appState)
@@ -415,7 +417,7 @@ bool initApplication(ApplicationState& appState)
 
 //TODO replace hard-coded file here
 	auto fontFileName = "arial.font";
-	if (!readFontFile(appState, fontFileName))
+	if (!readFontFile(appState.scratchMem, appState.textRenderConfig, appState.font, fontFileName))
 	{
 		goto resultFail;
 	}
