@@ -31,6 +31,7 @@ glTexStorage3D
 glTexSubImage3D
 glUniform1i
 glUniform2f
+glUniform4fv
 glUnmapBuffer
 glUseProgram
 glVertexAttribIPointer

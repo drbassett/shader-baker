@@ -241,6 +241,88 @@ success:
 	return success;
 }
 
+static inline bool initFillRectProgram(GLuint program)
+{
+	const char* vsSource = R"(
+		#version 330
+
+		uniform vec4 corners;
+
+		void main()
+		{
+			float minX = corners.x;
+			float minY = corners.y;
+			float maxX = corners.z;
+			float maxY = corners.w;
+			switch (gl_VertexID)
+			{
+			case 0:
+				gl_Position.xy = vec2(minX, maxY);
+				break;
+			case 1:
+				gl_Position.xy = vec2(minX, minY);
+				break;
+			case 2:
+				gl_Position.xy = vec2(maxX, maxY);
+				break;
+			case 3:
+				gl_Position.xy = vec2(maxX, minY);
+				break;
+			}
+			
+			gl_Position.z = 0.0;
+			gl_Position.w = 1.0;
+		}
+	)";
+
+	const char* fsSource = R"(
+		#version 330
+
+		uniform vec4 color;
+
+		out vec4 fragColor;
+
+		void main()
+		{
+			fragColor = color;
+		}
+	)";
+
+	auto vs = glCreateShader(GL_VERTEX_SHADER);
+	auto fs = glCreateShader(GL_FRAGMENT_SHADER);
+
+	if (!compileShaderChecked(vs, vsSource))
+	{
+		goto error;
+	}
+
+	if (!compileShaderChecked(fs, fsSource))
+	{
+		goto error;
+	}
+
+	glAttachShader(program, vs);
+	glAttachShader(program, fs);
+	glLinkProgram(program);
+	if (!programLinkSuccessful(program))
+	{
+		goto error;
+	}
+	glDetachShader(program, vs);
+	glDetachShader(program, fs);
+
+	bool success = true;
+	goto success;
+
+error:
+	success = false;
+success:
+	glDeleteShader(vs);
+	glDeleteShader(fs);
+
+	return success;
+}
+
 static inline void initUserRenderConfig(UserRenderConfig& userRenderConfig)
 {
 	const char* vsSource = R"(
@@ -333,6 +415,9 @@ returnResult:
 
 void destroyApplication(ApplicationState& appState)
 {
+	glDeleteVertexArrays(1, &appState.fillRectRenderConfig.vao);
+	glDeleteProgram(appState.fillRectRenderConfig.program);
+
 	glDeleteTextures(1, &appState.textRenderConfig.texture);
 	glDeleteSamplers(1, &appState.textRenderConfig.textureSampler);
 	glDeleteBuffers(1, &appState.textRenderConfig.charDataBuffer);
@@ -360,6 +445,9 @@ bool initApplication(ApplicationState& appState)
 	{
 		return false;
 	}
+
+	glGenVertexArrays(1, &appState.fillRectRenderConfig.vao);
+	appState.fillRectRenderConfig.program = glCreateProgram();
 
 	glGenTextures(1, &appState.textRenderConfig.texture);
 	glGenSamplers(1, &appState.textRenderConfig.textureSampler);
@@ -403,10 +491,20 @@ bool initApplication(ApplicationState& appState)
 	appState.loadUserRenderConfig = false;
 	initUserRenderConfig(appState.userRenderConfig);
 
+	if (!initFillRectProgram(appState.fillRectRenderConfig.program))
+	{
+		goto resultFail;
+	}
+
 	if (!initTextRenderingProgram(appState.textRenderConfig.program))
 	{
 		goto resultFail;
 	}
+
+	appState.fillRectRenderConfig.unifCorners = glGetUniformLocation(
+		appState.fillRectRenderConfig.program, "corners");
+	appState.fillRectRenderConfig.unifColor = glGetUniformLocation(
+		appState.fillRectRenderConfig.program, "color");
 
 	appState.textRenderConfig.unifViewportSizePx = glGetUniformLocation(
 		appState.textRenderConfig.program, "viewportSizePx");
@@ -544,10 +642,27 @@ static void drawText(
 	glDisable(GL_BLEND);
 }
 
-static inline void fillRectangle(RectI32 const& rect, float color[4])
+static inline void fillOpaqueRectangle(RectI32 const& rect, float color[4])
 {
 	glScissor(rect.min.x, rect.min.y, rectWidth(rect), rectHeight(rect));
 	glClearBufferfv(GL_COLOR, 0, color);
+}
+
+static inline void fillRectangle(
+	FillRectRenderConfig const& renderConfig,
+	float windowWidth,
+	float windowHeight,
+	RectI32 const& rect,
+	float color[4])
+{
+	GLfloat corners[4] = {
+		2.0f * ((float) rect.min.x / windowWidth - 0.5f),
+		2.0f * ((float) rect.min.y / windowHeight - 0.5f),
+		2.0f * ((float) rect.max.x / windowWidth - 0.5f),
+		2.0f * ((float) rect.max.y / windowHeight - 0.5f),};
+	glUniform4fv(renderConfig.unifCorners, 1, corners);
+	glUniform4fv(renderConfig.unifColor, 1, color);
+	glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 }
 
 static inline void processCommand(ApplicationState& appState)
@@ -661,11 +776,11 @@ void readShaderLog(
 	GLint logLength;
 	glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &logLength);
 
-	auto log = memStackPushArray(scratchMem, GLchar, logLength + 1);
+	auto log = memStackPushArray(scratchMem, GLchar, logLength);
 	GLsizei readLogLength;
 	glGetShaderInfoLog(shader, logLength, &readLogLength, log);
 
-	copyLogToTextChunks(permMem, result, freeList, log, logLength);
+	copyLogToTextChunks(permMem, result, freeList, log, logLength - 1);
 }
 
 void readProgramLog(
@@ -678,11 +793,11 @@ void readProgramLog(
 	GLint logLength;
 	glGetProgramiv(program, GL_INFO_LOG_LENGTH, &logLength);
 
-	auto log = memStackPushArray(scratchMem, GLchar, logLength + 1);
+	auto log = memStackPushArray(scratchMem, GLchar, logLength);
 	GLsizei readLogLength;
 	glGetProgramInfoLog(program, logLength, &readLogLength, log);
 
-	copyLogToTextChunks(permMem, result, freeList, log, logLength);
+	copyLogToTextChunks(permMem, result, freeList, log, logLength - 1);
 }
 
 void loadUserShader(
@@ -739,7 +854,7 @@ void loadUserRenderConfig(
 	if (infoLogErrors.vertShaderErrors != nullptr
 		|| infoLogErrors.fragShaderErrors != nullptr)
 	{
-		return;
+		goto cleanup;
 	}
 	
 	glLinkProgram(renderConfig.program);
@@ -754,7 +869,60 @@ void loadUserRenderConfig(
 			infoLogErrors.freeList);
 	}
 
+cleanup:
 	memStackPop(scratchMem, memMarker);
+}
+
+void infoLogToTextLines(
+	MemStack& scratchMem,
+	AsciiFont const& font,
+	char *header,
+	InfoLogTextChunk *textChunks,
+	i32 leftEdge,
+	i32& baseline)
+{
+	if (textChunks == nullptr)
+	{
+		return;
+	}
+
+	{
+		auto textLine = memStackPushType(scratchMem, TextLine);
+		textLine->leftEdge = leftEdge;
+		textLine->baseline = baseline;
+		textLine->text = stringSliceFromCString(header);
+		baseline -= font.advanceY;
+	}
+
+	while (textChunks != nullptr)
+	{
+		auto pChar = textChunks->text;
+		auto pCharEnd = pChar + textChunks->count;
+		textChunks = textChunks->next;
+
+		auto textLine = memStackPushType(scratchMem, TextLine);
+		textLine->leftEdge = leftEdge;
+		textLine->baseline = baseline;
+		textLine->text.begin = pChar;
+
+		while (pChar != pCharEnd)
+		{
+			if (*pChar == '\n')
+			{
+				textLine->text.end = pChar;
+				baseline -= font.advanceY;
+
+				textLine = memStackPushType(scratchMem, TextLine);
+				textLine->leftEdge = leftEdge;
+				textLine->baseline = baseline;
+				textLine->text.begin = pChar + 1;
+			}
+			++pChar;
+		}
+		textLine->text.end = pCharEnd;
+	}
+
+	baseline -= font.advanceY;
 }
 
 void updateApplication(ApplicationState& appState)
@@ -786,7 +954,12 @@ void updateApplication(ApplicationState& appState)
 		Vec2I32{0, 0},
 		Vec2I32{windowWidth, commandInputAreaBottom}};
 
+	auto errorOverlayArea = RectI32{
+		Vec2I32{previewArea.min.x + 20, previewArea.min.y + 20},
+		Vec2I32{previewArea.max.x - 20, previewArea.max.y - 20}};
+
 	float cornflowerBlue[4] = {0.3921568627451f, 0.5843137254902f, 0.9294117647059f, 1.0f};
+	float errorOverlayColor[4] = {0.0f, 0.0f, 0.0f, 0.5f};
 	float commandAreaColorDark[4] = {0.1f, 0.05f, 0.05f, 1.0f};
 	float commandAreaColorLight[4] = {0.2f, 0.1f, 0.1f, 1.0f};
 
@@ -794,6 +967,41 @@ void updateApplication(ApplicationState& appState)
 	u64 halfBlinkPeriod = blinkPeriod >> 1;
 	bool useDarkCommandAreaColor = appState.currentTime.value % blinkPeriod < halfBlinkPeriod;
 	auto commandAreaColor = useDarkCommandAreaColor ? commandAreaColorDark : commandAreaColorLight;
+
+	glEnable(GL_SCISSOR_TEST);
+	fillOpaqueRectangle(previewArea, cornflowerBlue);
+	fillOpaqueRectangle(commandInputArea, commandAreaColor);
+	glDisable(GL_SCISSOR_TEST);
+
+	glViewport(
+		previewArea.min.x,
+		previewArea.min.y,
+		rectWidth(previewArea),
+		rectHeight(previewArea));
+	glBindVertexArray(appState.userRenderConfig.vao);
+	glUseProgram(appState.userRenderConfig.program);
+	glDrawArrays(GL_TRIANGLES, 0, 3);
+
+	glViewport(0, 0, windowWidth, windowHeight);
+
+	if (appState.infoLogErrors.vertShaderErrors != nullptr
+		|| appState.infoLogErrors.fragShaderErrors != nullptr
+		|| appState.infoLogErrors.programErrors != nullptr)
+	{
+		auto windowWidthF = (float) appState.windowWidth;
+		auto windowHeightF = (float) appState.windowHeight;
+		glEnable(GL_BLEND);
+		glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+		glBindVertexArray(appState.fillRectRenderConfig.vao);
+		glUseProgram(appState.fillRectRenderConfig.program);
+		fillRectangle(
+			appState.fillRectRenderConfig,
+			windowWidthF,
+			windowHeightF,
+			errorOverlayArea,
+			errorOverlayColor);
+		glDisable(GL_BLEND);
+	}
 
 	auto memMarker = memStackMark(appState.scratchMem);
 
@@ -805,14 +1013,33 @@ void updateApplication(ApplicationState& appState)
 		commandLineText->text.begin = appState.commandLine;
 		commandLineText->text.end = appState.commandLine + appState.commandLineLength;
 	}
+	{
+		auto infoLogLeftEdge = errorOverlayArea.min.x + 5;
+		auto infoLogBaseline = errorOverlayArea.max.y - 20;
+		infoLogToTextLines(
+			appState.scratchMem,
+			appState.font,
+			"Errors in vertex shader:",
+			appState.infoLogErrors.vertShaderErrors,
+			infoLogLeftEdge,
+			infoLogBaseline);
+		infoLogToTextLines(
+			appState.scratchMem,
+			appState.font,
+			"Errors in fragment shader:",
+			appState.infoLogErrors.fragShaderErrors,
+			infoLogLeftEdge,
+			infoLogBaseline);
+		infoLogToTextLines(
+			appState.scratchMem,
+			appState.font,
+			"Errors in program:",
+			appState.infoLogErrors.programErrors,
+			infoLogLeftEdge,
+			infoLogBaseline);
+	}
 	auto textLinesEnd = (TextLine*) appState.scratchMem.top;
 
-	glEnable(GL_SCISSOR_TEST);
-	fillRectangle(previewArea, cornflowerBlue);
-	fillRectangle(commandInputArea, commandAreaColor);
-	glDisable(GL_SCISSOR_TEST);
-
-	glViewport(0, 0, windowWidth, windowHeight);
 	drawText(
 		appState.textRenderConfig,
 		appState.font,
@@ -820,15 +1047,6 @@ void updateApplication(ApplicationState& appState)
 		appState.windowHeight,
 		textLinesBegin,
 		textLinesEnd);
-
-	glViewport(
-		previewArea.min.x,
-		previewArea.min.y,
-		rectWidth(previewArea),
-		rectHeight(previewArea));
-	glBindVertexArray(appState.userRenderConfig.vao);
-	glUseProgram(appState.userRenderConfig.program);
-	glDrawArrays(GL_TRIANGLES, 0, 3);
 
 	memStackPop(appState.scratchMem, memMarker);
 

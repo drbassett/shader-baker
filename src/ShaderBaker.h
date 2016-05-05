@@ -34,6 +34,13 @@ struct AsciiFont
 	GlyphMetrics glyphMetrics[256];
 };
 
+struct FillRectRenderConfig
+{
+	GLuint vao;
+	GLuint program;
+	GLint unifCorners, unifColor;
+};
+
 struct TextRenderConfig
 {
 	GLuint texture;
@@ -87,6 +94,7 @@ struct ApplicationState
 
 	AsciiFont font;
 
+	FillRectRenderConfig fillRectRenderConfig;
 	TextRenderConfig textRenderConfig;
 
 	bool loadUserRenderConfig;
