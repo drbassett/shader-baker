@@ -10,6 +10,7 @@
 #define arrayLength(array) sizeof(array) / sizeof(array[0])
 #define memStackPushType(mem, type) (type*) memStackPush(mem, sizeof(type))
 #define memStackPushArray(mem, type, size) (type*) memStackPush(mem, (size) * sizeof(type))
+#define unreachable() assert(false)
 
 static bool memStackInit(MemStack& stack, size_t capacity)
 {
@@ -52,6 +53,16 @@ inline void memStackPop(MemStack& mem, MemStackMarker marker)
 inline void memStackClear(MemStack& mem)
 {
 	mem.top = mem.begin;
+}
+
+inline size_t cStringLength(char *c)
+{
+	auto end = c;
+	while (*end != '\0')
+	{
+		++end;
+	}
+	return end - c;
 }
 
 inline size_t stringSliceLength(StringSlice str)
@@ -810,15 +821,40 @@ void loadUserShader(
 {
 	freeInfoLogTextChunks(errorLog, errorLogFreeList);
 
+	ReadFileError readError;
+	u8* fileContents;
 	size_t fileSize;
-	auto fileContents = PLATFORM_readWholeFile(scratchMem, shaderPath, fileSize);
-//TODO there is no guarantee that fileSize is big enough to fit in a GLint - bulletproof this
-	auto fileSizeTruncated = (GLint) fileSize;
+	PLATFORM_readWholeFile(scratchMem, shaderPath, readError, fileContents, fileSize);
 	if (fileContents == nullptr)
 	{
+		char *errorString;
+		switch (readError)
+		{
+		case ReadFileError::FileNotFound:
+			errorString = "The shader file does not exist";
+			break;
+		case ReadFileError::FileInUse:
+			errorString = "The shader file is in use by another process";
+			break;
+		case ReadFileError::AccessDenied:
+			errorString =
+				"The Operating System denied access to the shader file. You may have insufficient \
+				permissions, or the file may be pending deletion.";
+			break;
+		case ReadFileError::Other:
+			errorString = "The shader file could not be read";
+			break;
+		default:
+			unreachable();
+			errorString = "";
+		}
+		auto errorStringLength = (GLint) cStringLength(errorString);
+		copyLogToTextChunks(permMem, errorLog, errorLogFreeList, errorString, errorStringLength);
 		return;
 	}
 
+//TODO there is no guarantee that fileSize is big enough to fit in a GLint - bulletproof this
+	auto fileSizeTruncated = (GLint) fileSize;
 	glShaderSource(shader, 1, (GLchar**) &fileContents, &fileSizeTruncated);
 	glCompileShader(shader);
 	if (!shaderCompileSuccessful(shader))

@@ -21,20 +21,49 @@ inline bool PLATFORM_free(void* memory)
 	return VirtualFree(memory, NULL, MEM_RELEASE) != 0;
 }
 
-u8* PLATFORM_readWholeFile(MemStack& scratchMem, FilePath const filePath, size_t& fileSize)
+static HANDLE openFile(MemStack& scratchMem, FilePath const filePath)
 {
-	HANDLE fileHandle;
-	{
-		auto filePathLength = stringSliceLength(filePath.path);
-		auto fileNameCString = memStackPushArray(scratchMem, char, filePathLength + 1);
-		memcpy(fileNameCString, filePath.path.begin, filePathLength);
-		fileNameCString[filePathLength] = 0;
-		fileHandle = CreateFileA(fileNameCString, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
-	}
+	auto filePathLength = stringSliceLength(filePath.path);
+	auto fileNameCString = memStackPushArray(scratchMem, char, filePathLength + 1);
+	memcpy(fileNameCString, filePath.path.begin, filePathLength);
+	fileNameCString[filePathLength] = 0;
+	return CreateFileA(fileNameCString, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+	
+}
 
+static ReadFileError getReadFileError()
+{
+	auto errorCode = GetLastError();
+	switch (errorCode)
+	{
+	case ERROR_FILE_NOT_FOUND:
+		return ReadFileError::FileNotFound;
+	case ERROR_SHARING_VIOLATION:
+		return ReadFileError::FileInUse;
+	case ERROR_ACCESS_DENIED:
+		return ReadFileError::AccessDenied;
+	default:
+		unreachable();
+		// For release mode, this function needs to return something
+		// reasonable. "Other" is better than garbage.
+		return ReadFileError::Other;
+	}
+}
+
+void PLATFORM_readWholeFile(
+	MemStack& scratchMem,
+	FilePath const filePath,
+	ReadFileError& readError,
+	u8*& fileContents,
+	size_t& fileSize)
+{
+	HANDLE fileHandle = openFile(scratchMem, filePath);
 	if (fileHandle == INVALID_HANDLE_VALUE)
 	{
-		return nullptr;
+		fileContents = nullptr;
+		fileSize = 0;
+		readError = getReadFileError();
+		return;
 	}
 
 	{
@@ -46,10 +75,10 @@ u8* PLATFORM_readWholeFile(MemStack& scratchMem, FilePath const filePath, size_t
 		fileSize = size.QuadPart;
 	}
 
-	auto result = memStackPushArray(scratchMem, u8, fileSize);
+	fileContents = memStackPushArray(scratchMem, u8, fileSize);
 
 	DWORD bytesRead;
-	auto readPtr = result;
+	auto readPtr = fileContents;
 	auto remainingBytesToRead = fileSize;
 	const u32 maxU32 = 0xFFFFFFFF;
 	// the ReadFile function windows provides uses a 32-bit parameter for the
@@ -75,11 +104,12 @@ u8* PLATFORM_readWholeFile(MemStack& scratchMem, FilePath const filePath, size_t
 	goto success;
 
 error:
+	fileContents = nullptr;
 	fileSize = 0;
-	result = nullptr;
+	readError = getReadFileError();
 success:
-	CloseHandle(fileHandle);
-	return result;
+	auto closeResult = CloseHandle(fileHandle);
+	assert(closeResult != 0);
 }
 
 bool fileTimesEqual(FILETIME lhs, FILETIME rhs)
@@ -89,26 +119,16 @@ bool fileTimesEqual(FILETIME lhs, FILETIME rhs)
 
 bool getFileWriteTime(MemStack& scratchMem, FilePath const filePath, FILETIME& writeTime)
 {
-	HANDLE fileHandle;
-	{
-		auto filePathLength = stringSliceLength(filePath.path);
-		auto fileNameCString = memStackPushArray(scratchMem, char, filePathLength + 1);
-		memcpy(fileNameCString, filePath.path.begin, filePathLength);
-		fileNameCString[filePathLength] = 0;
-		fileHandle = CreateFileA(fileNameCString, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
-	}
-
+	HANDLE fileHandle = openFile(scratchMem, filePath);
 	if (fileHandle == INVALID_HANDLE_VALUE)
 	{
 		return false;
 	}
 
+	FILETIME createTime, accessTime;
+	if (!GetFileTime(fileHandle, &createTime, &accessTime, &writeTime))
 	{
-		FILETIME createTime, accessTime;
-		if (!GetFileTime(fileHandle, &createTime, &accessTime, &writeTime))
-		{
-			goto error;
-		}
+		goto error;
 	}
 
 	bool result = true;
@@ -116,9 +136,9 @@ bool getFileWriteTime(MemStack& scratchMem, FilePath const filePath, FILETIME& w
 
 error:
 	result = false;
-
 success:
-	CloseHandle(fileHandle);
+	auto closeResult = CloseHandle(fileHandle);
+	assert(closeResult != 0);
 	return result;
 }
 
@@ -439,20 +459,25 @@ int CALLBACK WinMain(
 
 		{
 			auto memMarker = memStackMark(appState.scratchMem);
+			FILETIME writeTime = {};
 
-			FILETIME nextVertShaderWriteTime = {};
-			if (getFileWriteTime(appState.scratchMem, userVertShaderPath, nextVertShaderWriteTime)
-				&& !fileTimesEqual(nextVertShaderWriteTime, lastVertShaderWriteTime))
+			if (!getFileWriteTime(appState.scratchMem, userVertShaderPath, writeTime))
 			{
-				lastVertShaderWriteTime = nextVertShaderWriteTime;
+				writeTime = {};
+			}
+			if (!fileTimesEqual(writeTime, lastVertShaderWriteTime))
+			{
+				lastVertShaderWriteTime = writeTime;
 				appState.loadUserRenderConfig = true;
 			}
 
-			FILETIME nextFragShaderWriteTime = {};
-			if (getFileWriteTime(appState.scratchMem, userFragShaderPath, nextFragShaderWriteTime)
-				&& !fileTimesEqual(nextFragShaderWriteTime, lastFragShaderWriteTime))
+			if (!getFileWriteTime(appState.scratchMem, userFragShaderPath, writeTime))
 			{
-				lastFragShaderWriteTime = nextFragShaderWriteTime;
+				writeTime = {};
+			}
+			if (!fileTimesEqual(writeTime, lastFragShaderWriteTime))
+			{
+				lastFragShaderWriteTime = writeTime;
 				appState.loadUserRenderConfig = true;
 			}
 
