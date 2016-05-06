@@ -1,220 +1,124 @@
+#include <cassert>
 #include <cstdio>
 #include <gl/gl.h>
 #include "../include/glcorearb.h"
 #include "generated/glFunctions.cpp"
+#include "Types.h"
+#include "ShaderBaker.h"
+#include "Platform.h"
 
 #define arrayLength(array) sizeof(array) / sizeof(array[0])
+#define memStackPushType(mem, type) (type*) memStackPush(mem, sizeof(type))
+#define memStackPushArray(mem, type, size) (type*) memStackPush(mem, (size) * sizeof(type))
+#define unreachable() assert(false)
 
-struct StringSlice
+static bool memStackInit(MemStack& stack, size_t capacity)
 {
-	char *begin, *end;
-};
-
-struct TextLine
-{
-	i32 leftEdge, baseline;
-	StringSlice text;
-};
-
-struct GlyphMetrics
-{
-	i32 offsetTop, offsetLeft;
-	u32 advanceX;
-};
-
-struct AsciiFont
-{
-	u32 bitmapWidth, bitmapHeight;
-	u32 advanceY;
-	GlyphMetrics glyphMetrics[256];
-};
-
-struct SimpleRenderConfig
-{
-	GLuint program;
-	GLuint vao;
-};
-
-struct TextRenderConfig
-{
-	GLuint texture;
-	GLuint textureSampler;
-	GLint textureUnit;
-
-	GLuint vao;
-	GLuint charDataBuffer;
-
-	GLuint program;
-	GLint unifViewportSizePx, unifCharacterSizePx, unifCharacterSampler;
-	GLint attribLowerLeft, attribCharacterIndex;
-};
-
-struct MicroSeconds
-{
-	u64 value;
-};
-
-struct ApplicationState
-{
-	AsciiFont font;
-
-	SimpleRenderConfig simpleRenderConfig;
-	TextRenderConfig textRenderConfig;
-
-	char *keyBuffer;
-	size_t keyBufferLength;
-
-	unsigned windowWidth, windowHeight;
-
-	size_t textLineCount;
-	TextLine* textLines;
-
-	char commandLine[256];
-	size_t commandLineLength, commandLineCapacity;
-
-	MicroSeconds currentTime;
-};
-
-struct Vec2I32
-{
-	i32 x, y;
-};
-
-struct RectI32
-{
-	Vec2I32 min, max;
-};
-
-inline void assert(bool condition)
-{
-	if (!condition)
+	assert(capacity > 0);
+	
+	auto memory = (u8*) PLATFORM_alloc(capacity);
+	if (memory == nullptr)
 	{
-		*((char*) nullptr);
+		return false;
 	}
+
+	stack.begin = memory;
+	stack.top = memory;
+	stack.end = memory + capacity;
+	return true;
 }
 
-static inline size_t stringSliceLength(StringSlice str)
+//TODO memory alignment
+inline void* memStackPush(MemStack& mem, size_t size)
+{
+	size_t remainingSize = mem.end - mem.top;
+//TODO figure out how to "gracefully crash" the application if memory runs out
+	assert(size <= remainingSize);
+	auto result = mem.top;
+ 	mem.top += size;
+	return result;
+}
+
+inline MemStackMarker memStackMark(MemStack const& mem)
+{
+	return MemStackMarker{mem.top};
+}
+
+inline void memStackPop(MemStack& mem, MemStackMarker marker)
+{
+	assert(marker.p >= mem.begin && marker.p < mem.end);
+	mem.top = marker.p;
+}
+
+inline void memStackClear(MemStack& mem)
+{
+	mem.top = mem.begin;
+}
+
+inline size_t cStringLength(char *c)
+{
+	auto end = c;
+	while (*end != '\0')
+	{
+		++end;
+	}
+	return end - c;
+}
+
+inline size_t stringSliceLength(StringSlice str)
 {
 	return str.end - str.begin;
 }
 
-static inline i32 rectWidth(RectI32 const& rect)
+inline StringSlice stringSliceFromCString(char *cstr)
+{
+	StringSlice result = {};
+	result.begin = cstr;
+	for (;;)
+	{
+		auto c = *cstr;
+		if (c == 0)
+		{
+			break;
+		}
+		++cstr;
+	}
+	result.end = cstr;
+	return result;
+}
+
+inline i32 rectWidth(RectI32 const& rect)
 {
 	return rect.max.x - rect.min.x;
 }
 
-static inline i32 rectHeight(RectI32 const& rect)
+inline i32 rectHeight(RectI32 const& rect)
 {
 	return rect.max.y - rect.min.y;
 }
 
-static bool compileShaderChecked(
-	GLuint shader,
-	const char* source,
-	GLsizei maxLogLength,
-	GLchar *log,
-	GLsizei& logLength)
+static inline bool shaderCompileSuccessful(GLuint shader)
+{
+	GLint compileStatus;
+	glGetShaderiv(shader, GL_COMPILE_STATUS, &compileStatus);
+	return compileStatus == GL_TRUE;
+}
+
+static bool compileShaderChecked(GLuint shader, const char* source)
 {
 	glShaderSource(shader, 1, &source, 0);
 	glCompileShader(shader);
-
-	GLint compileStatus;
-	glGetShaderiv(shader, GL_COMPILE_STATUS, &compileStatus);
-	if (compileStatus == GL_TRUE)
-	{
-		return true;
-	}
-
-	// GLint infoLogLength;
-	// glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &infoLogLength);
-
-	glGetShaderInfoLog(shader, maxLogLength, &logLength, log);
-
-	return false;
+	return shaderCompileSuccessful(shader);
 }
 
-static bool linkProgramChecked(
-	GLuint program,
-	GLsizei maxLogLength,
-	GLchar *log,
-	GLsizei& logLength)
+static bool programLinkSuccessful(GLuint program)
 {
-	glLinkProgram(program);
-
 	GLint linkStatus;
 	glGetProgramiv(program, GL_LINK_STATUS, &linkStatus);
-	if (linkStatus == GL_TRUE)
-	{
-		return true;
-	}
-
-	// GLint infoLogLength;
-	// glGetProgramiv(program, GL_INFO_LOG_LENGTH, &infoLogLength);
-
-	glGetProgramInfoLog(program, maxLogLength, &logLength, log);
-
-	return false;
+	return linkStatus == GL_TRUE;
 }
 
-static inline bool createSimpleProgram(GLsizei maxLogLength, GLchar* infoLog, GLuint program)
-{
-	const char* vsSource = R"(
-		#version 330
-
-		void main()
-		{
-			gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
-		}
-	)";
-
-	const char* fsSource = R"(
-		#version 330
-
-		out vec4 color;
-
-		void main()
-		{
-			color = vec4(0.8, 0.0, 0.0, 1.0);
-		}
-	)";
-
-	bool success = true;
-	GLsizei logLength;
-
-	auto vs = glCreateShader(GL_VERTEX_SHADER);
-	auto fs = glCreateShader(GL_FRAGMENT_SHADER);
-	
-	if (!compileShaderChecked(vs, vsSource, maxLogLength, infoLog, logLength))
-	{
-		goto resultFail;
-	}
-
-	if (!compileShaderChecked(fs, fsSource, maxLogLength, infoLog, logLength))
-	{
-		goto resultFail;
-	}
-
-	glAttachShader(program, vs);
-	glAttachShader(program, fs);
-	if (!linkProgramChecked(program, maxLogLength, infoLog, logLength))
-	{
-		goto resultFail;
-	}
-	glDetachShader(program, vs);
-	glDetachShader(program, fs);
-
-	goto resultSuccess;
-
-resultFail:
-	success = false;
-resultSuccess:
-	glDeleteShader(vs);
-	glDeleteShader(fs);
-
-	return success;
-}
-
-static inline bool createTextRenderingProgram(GLsizei maxLogLength, GLchar* infoLog, GLuint program)
+static inline bool initTextRenderingProgram(GLuint program)
 {
 	const char* vsSource = R"(
 		#version 330
@@ -304,44 +208,43 @@ static inline bool createTextRenderingProgram(GLsizei maxLogLength, GLchar* info
 		}
 	)";
 
-	bool success = true;
-	GLsizei logLength;
-
 	auto vs = glCreateShader(GL_VERTEX_SHADER);
 	auto gs = glCreateShader(GL_GEOMETRY_SHADER);
 	auto fs = glCreateShader(GL_FRAGMENT_SHADER);
 
-	if (!compileShaderChecked(vs, vsSource, maxLogLength, infoLog, logLength))
+	if (!compileShaderChecked(vs, vsSource))
 	{
-		goto resultFail;
+		goto error;
 	}
 
-	if (!compileShaderChecked(gs, gsSource, maxLogLength, infoLog, logLength))
+	if (!compileShaderChecked(gs, gsSource))
 	{
-		goto resultFail;
+		goto error;
 	}
 
-	if (!compileShaderChecked(fs, fsSource, maxLogLength, infoLog, logLength))
+	if (!compileShaderChecked(fs, fsSource))
 	{
-		goto resultFail;
+		goto error;
 	}
 
 	glAttachShader(program, vs);
 	glAttachShader(program, gs);
 	glAttachShader(program, fs);
-	if (!linkProgramChecked(program, maxLogLength, infoLog, logLength))
+	glLinkProgram(program);
+	if (!programLinkSuccessful(program))
 	{
-		goto resultFail;
+		goto error;
 	}
 	glDetachShader(program, vs);
 	glDetachShader(program, gs);
 	glDetachShader(program, fs);
 
-	goto resultSuccess;
+	bool success = true;
+	goto success;
 
-resultFail:
+error:
 	success = false;
-resultSuccess:
+success:
 	glDeleteShader(vs);
 	glDeleteShader(gs);
 	glDeleteShader(fs);
@@ -349,7 +252,126 @@ resultSuccess:
 	return success;
 }
 
-static inline bool readFontFile(ApplicationState& appState, const char *fileName)
+static inline bool initFillRectProgram(GLuint program)
+{
+	const char* vsSource = R"(
+		#version 330
+
+		uniform vec4 corners;
+
+		void main()
+		{
+			float minX = corners.x;
+			float minY = corners.y;
+			float maxX = corners.z;
+			float maxY = corners.w;
+			switch (gl_VertexID)
+			{
+			case 0:
+				gl_Position.xy = vec2(minX, maxY);
+				break;
+			case 1:
+				gl_Position.xy = vec2(minX, minY);
+				break;
+			case 2:
+				gl_Position.xy = vec2(maxX, maxY);
+				break;
+			case 3:
+				gl_Position.xy = vec2(maxX, minY);
+				break;
+			}
+			
+			gl_Position.z = 0.0;
+			gl_Position.w = 1.0;
+		}
+	)";
+
+	const char* fsSource = R"(
+		#version 330
+
+		uniform vec4 color;
+
+		out vec4 fragColor;
+
+		void main()
+		{
+			fragColor = color;
+		}
+	)";
+
+	auto vs = glCreateShader(GL_VERTEX_SHADER);
+	auto fs = glCreateShader(GL_FRAGMENT_SHADER);
+
+	if (!compileShaderChecked(vs, vsSource))
+	{
+		goto error;
+	}
+
+	if (!compileShaderChecked(fs, fsSource))
+	{
+		goto error;
+	}
+
+	glAttachShader(program, vs);
+	glAttachShader(program, fs);
+	glLinkProgram(program);
+	if (!programLinkSuccessful(program))
+	{
+		goto error;
+	}
+	glDetachShader(program, vs);
+	glDetachShader(program, fs);
+
+	bool success = true;
+	goto success;
+
+error:
+	success = false;
+success:
+	glDeleteShader(vs);
+	glDeleteShader(fs);
+
+	return success;
+}
+
+static inline void initUserRenderConfig(UserRenderConfig& userRenderConfig)
+{
+	const char* vsSource = R"(
+		#version 330
+
+		void main() { }
+	)";
+
+	const char* fsSource = R"(
+		#version 330
+
+		out vec4 fragColor;
+
+		void main() { }
+	)";
+
+	glGenVertexArrays(1, &userRenderConfig.vao);
+	userRenderConfig.vertShader = glCreateShader(GL_VERTEX_SHADER);
+	userRenderConfig.fragShader = glCreateShader(GL_FRAGMENT_SHADER);
+	userRenderConfig.program = glCreateProgram();
+
+	glAttachShader(userRenderConfig.program, userRenderConfig.vertShader);
+	glAttachShader(userRenderConfig.program, userRenderConfig.fragShader);
+
+	glShaderSource(userRenderConfig.vertShader, 1, &vsSource, 0);
+	glCompileShader(userRenderConfig.vertShader);
+	assert(shaderCompileSuccessful(userRenderConfig.vertShader));
+
+	glShaderSource(userRenderConfig.fragShader, 1, &fsSource, 0);
+	glCompileShader(userRenderConfig.fragShader);
+	assert(shaderCompileSuccessful(userRenderConfig.fragShader));
+
+	glLinkProgram(userRenderConfig.program);
+	assert(programLinkSuccessful(userRenderConfig.program));
+}
+
+static inline bool readFontFile(
+	MemStack& scratchMem, TextRenderConfig& textRenderConfig, AsciiFont& font, const char *fileName)
 {
 	auto fontFile = fopen(fileName, "rb");
 	if (!fontFile)
@@ -358,70 +380,85 @@ static inline bool readFontFile(ApplicationState& appState, const char *fileName
 		return false;
 	}
 
-	bool result = true;
+	bool success = true;
 
-	fread(&appState.font, sizeof(appState.font), 1, fontFile);
-	auto bitmapSize = appState.font.bitmapWidth * appState.font.bitmapHeight;
+	auto memMarker = memStackMark(scratchMem);
+
+//TODO replace fread with a platform-specific calls
+	fread(&font, sizeof(font), 1, fontFile);
+	auto bitmapSize = font.bitmapWidth * font.bitmapHeight;
 	auto bitmapStorageSize = bitmapSize * 256;
-//TODO consider using a fixed size buffer on the stack and uploading the texture in chunks
-	auto bitmapStorage = (u8*) malloc(bitmapStorageSize);
+	auto bitmapStorage = (u8*) memStackPush(scratchMem, bitmapStorageSize);
 	if (bitmapStorage == nullptr)
 	{
 		puts("Not enough memory to read font file");
-		goto cleanup1;
+		success = false;
+		goto returnResult;
 	}
 	fread(bitmapStorage, 1, bitmapStorageSize, fontFile);
 
 	if (ferror(fontFile))
 	{
 		perror("ERROR: failed to read font file");
-		goto cleanup2;
+		success = false;
+		goto returnResult;
 	}
 
-	//NOTE glMapBuffer with GL_PIXEL_UNPACK_BUFFER can be used to updload textures. It probably
-	// will not have any advantage in this situtation, however.
-	glBindTexture(GL_TEXTURE_2D_ARRAY, appState.textRenderConfig.texture);
-	glTexStorage3D(GL_TEXTURE_2D_ARRAY, 1, GL_RGBA8, appState.font.bitmapWidth, appState.font.bitmapHeight, 256);
+	glBindTexture(GL_TEXTURE_2D_ARRAY, textRenderConfig.texture);
+	glTexStorage3D(GL_TEXTURE_2D_ARRAY, 1, GL_RGBA8, font.bitmapWidth, font.bitmapHeight, 256);
 	glTexSubImage3D(
 		GL_TEXTURE_2D_ARRAY,
 		0,
 		0, 0, 0,
-		appState.font.bitmapWidth, appState.font.bitmapHeight, 256,
+		font.bitmapWidth, font.bitmapHeight, 256,
 		GL_RED,
 		GL_UNSIGNED_BYTE,
 		bitmapStorage);
 
-cleanup2:
-	free(bitmapStorage);
-cleanup1:
+returnResult:
 	if (fclose(fontFile) != 0)
 	{
 		perror("WARNING: failed to close output file");
 	}
-	return result;
+	memStackPop(scratchMem, memMarker);
+	return success;
 }
 
 void destroyApplication(ApplicationState& appState)
 {
-	glDeleteProgram(appState.simpleRenderConfig.program);
-	glDeleteVertexArrays(1, &appState.simpleRenderConfig.vao);
+	glDeleteVertexArrays(1, &appState.fillRectRenderConfig.vao);
+	glDeleteProgram(appState.fillRectRenderConfig.program);
 
 	glDeleteTextures(1, &appState.textRenderConfig.texture);
 	glDeleteSamplers(1, &appState.textRenderConfig.textureSampler);
 	glDeleteBuffers(1, &appState.textRenderConfig.charDataBuffer);
 	glDeleteVertexArrays(1, &appState.textRenderConfig.vao);
 	glDeleteProgram(appState.textRenderConfig.program);
+
+	glDeleteVertexArrays(1, &appState.userRenderConfig.vao);
+	glDeleteShader(appState.userRenderConfig.vertShader);
+	glDeleteShader(appState.userRenderConfig.fragShader);
+	glDeleteProgram(appState.userRenderConfig.program);
+}
+
+static inline size_t megabytes(size_t value)
+{
+	return value * 1024 * 1024;
 }
 
 bool initApplication(ApplicationState& appState)
 {
-	glPointSize(10.0f);
+	if (!memStackInit(appState.permMem, megabytes(64)))
+	{
+		return false;
+	}
+	if (!memStackInit(appState.scratchMem, megabytes(256)))
+	{
+		return false;
+	}
 
-	GLchar infoLog[1024];
-	GLsizei maxLogLength = 1024;
-
-	appState.simpleRenderConfig.program = glCreateProgram();
-	glGenVertexArrays(1, &appState.simpleRenderConfig.vao);
+	glGenVertexArrays(1, &appState.fillRectRenderConfig.vao);
+	appState.fillRectRenderConfig.program = glCreateProgram();
 
 	glGenTextures(1, &appState.textRenderConfig.texture);
 	glGenSamplers(1, &appState.textRenderConfig.textureSampler);
@@ -462,15 +499,23 @@ bool initApplication(ApplicationState& appState)
 
 	appState.textRenderConfig.program = glCreateProgram();
 
-	if (!createSimpleProgram(maxLogLength, infoLog, appState.simpleRenderConfig.program))
+	appState.loadUserRenderConfig = false;
+	initUserRenderConfig(appState.userRenderConfig);
+
+	if (!initFillRectProgram(appState.fillRectRenderConfig.program))
 	{
 		goto resultFail;
 	}
 
-	if (!createTextRenderingProgram(maxLogLength, infoLog, appState.textRenderConfig.program))
+	if (!initTextRenderingProgram(appState.textRenderConfig.program))
 	{
 		goto resultFail;
 	}
+
+	appState.fillRectRenderConfig.unifCorners = glGetUniformLocation(
+		appState.fillRectRenderConfig.program, "corners");
+	appState.fillRectRenderConfig.unifColor = glGetUniformLocation(
+		appState.fillRectRenderConfig.program, "color");
 
 	appState.textRenderConfig.unifViewportSizePx = glGetUniformLocation(
 		appState.textRenderConfig.program, "viewportSizePx");
@@ -481,7 +526,7 @@ bool initApplication(ApplicationState& appState)
 
 //TODO replace hard-coded file here
 	auto fontFileName = "arial.font";
-	if (!readFontFile(appState, fontFileName))
+	if (!readFontFile(appState.scratchMem, appState.textRenderConfig, appState.font, fontFileName))
 	{
 		goto resultFail;
 	}
@@ -524,34 +569,42 @@ static bool operator==(StringSlice lhs, const char* rhs)
 	}
 }
 
-static void drawText(ApplicationState& appState)
+static void drawText(
+	TextRenderConfig const& textRenderConfig,
+	AsciiFont& font,
+	unsigned windowWidth,
+	unsigned windowHeight,
+	TextLine *textLinesBegin,
+	TextLine *textLinesEnd)
 {
-	auto textLines = appState.textLines;
-	auto lineCount = appState.textLineCount;
-
 	size_t charCount = 0;
-	for (int i = 0; i < lineCount; ++i)
+	auto pTextLine = textLinesBegin;
+	while (pTextLine != textLinesEnd)
 	{
-		charCount += stringSliceLength(textLines[i].text);
+		charCount += stringSliceLength(pTextLine->text);
+		++pTextLine;
 	}
 
 	auto charDataBufferSize = charCount * sizeof(GLuint) * 3;
-	glBindBuffer(GL_ARRAY_BUFFER, appState.textRenderConfig.charDataBuffer);
+	glBindBuffer(GL_ARRAY_BUFFER, textRenderConfig.charDataBuffer);
 	glBufferData(GL_ARRAY_BUFFER, charDataBufferSize, 0, GL_STREAM_DRAW);
+	pTextLine = textLinesBegin;
 	auto pCharData = (GLuint*) glMapBuffer(GL_ARRAY_BUFFER, GL_WRITE_ONLY);
-	for (int i = 0; i < lineCount; ++i)
+	while (pTextLine != textLinesEnd)
 	{
-		auto line = textLines[i];
-		auto cPtr = line.text.begin;
-		auto charX = line.leftEdge;
+		auto cPtr = pTextLine->text.begin;
+		auto cPtrEnd = pTextLine->text.end;
+		auto charX = pTextLine->leftEdge;
+		auto baseline = pTextLine->baseline;
+		++pTextLine;
 
-		while (cPtr != line.text.end)
+		while (cPtr != cPtrEnd)
 		{
 			auto c = *cPtr;
-			auto glyphMetrics = appState.font.glyphMetrics[c];
+			auto glyphMetrics = font.glyphMetrics[c];
 
 			pCharData[0] = charX + glyphMetrics.offsetLeft;
-			pCharData[1] = line.baseline - glyphMetrics.offsetTop;
+			pCharData[1] = baseline - glyphMetrics.offsetTop;
 			pCharData[2] = c;
 
 			charX += glyphMetrics.advanceX;
@@ -570,27 +623,27 @@ static void drawText(ApplicationState& appState)
 		return;
 	}
 
-	glBindBuffer(GL_ARRAY_BUFFER, appState.textRenderConfig.charDataBuffer);
-	glBindVertexArray(appState.textRenderConfig.vao);
-	glUseProgram(appState.textRenderConfig.program);
+	glBindBuffer(GL_ARRAY_BUFFER, textRenderConfig.charDataBuffer);
+	glBindVertexArray(textRenderConfig.vao);
+	glUseProgram(textRenderConfig.program);
 
 	glUniform2f(
-		appState.textRenderConfig.unifViewportSizePx,
-		(GLfloat) appState.windowWidth,
-		(GLfloat) appState.windowHeight);
+		textRenderConfig.unifViewportSizePx,
+		(GLfloat) windowWidth,
+		(GLfloat) windowHeight);
 	glUniform2f(
-		appState.textRenderConfig.unifCharacterSizePx,
-		(float) appState.font.bitmapWidth,
-		(float) appState.font.bitmapHeight);
+		textRenderConfig.unifCharacterSizePx,
+		(float) font.bitmapWidth,
+		(float) font.bitmapHeight);
 
-	glActiveTexture(GL_TEXTURE0 + appState.textRenderConfig.textureUnit);
-	glBindTexture(GL_TEXTURE_2D_ARRAY, appState.textRenderConfig.texture);
+	glActiveTexture(GL_TEXTURE0 + textRenderConfig.textureUnit);
+	glBindTexture(GL_TEXTURE_2D_ARRAY, textRenderConfig.texture);
 	glBindSampler(
-		appState.textRenderConfig.textureUnit,
-		appState.textRenderConfig.textureSampler);
+		textRenderConfig.textureUnit,
+		textRenderConfig.textureSampler);
 	glUniform1i(
-		appState.textRenderConfig.unifCharacterSampler,
-		appState.textRenderConfig.textureUnit);
+		textRenderConfig.unifCharacterSampler,
+		textRenderConfig.textureUnit);
 
 	glEnable(GL_BLEND);
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -600,10 +653,27 @@ static void drawText(ApplicationState& appState)
 	glDisable(GL_BLEND);
 }
 
-static inline void fillRectangle(RectI32 const& rect, float color[4])
+static inline void fillOpaqueRectangle(RectI32 const& rect, float color[4])
 {
 	glScissor(rect.min.x, rect.min.y, rectWidth(rect), rectHeight(rect));
 	glClearBufferfv(GL_COLOR, 0, color);
+}
+
+static inline void fillRectangle(
+	FillRectRenderConfig const& renderConfig,
+	float windowWidth,
+	float windowHeight,
+	RectI32 const& rect,
+	float color[4])
+{
+	GLfloat corners[4] = {
+		2.0f * ((float) rect.min.x / windowWidth - 0.5f),
+		2.0f * ((float) rect.min.y / windowHeight - 0.5f),
+		2.0f * ((float) rect.max.x / windowWidth - 0.5f),
+		2.0f * ((float) rect.max.y / windowHeight - 0.5f),};
+	glUniform4fv(renderConfig.unifCorners, 1, corners);
+	glUniform4fv(renderConfig.unifColor, 1, color);
+	glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 }
 
 static inline void processCommand(ApplicationState& appState)
@@ -616,9 +686,6 @@ static inline void processCommand(ApplicationState& appState)
 	if (command == "set-color")
 	{
 		glClearColor(0.2f, 0.15f, 0.15f, 1.0f);
-	} else if (command == "set-point-size")
-	{
-		glPointSize(15.0f);
 	} else
 	{
 //TODO handle unknown command
@@ -661,23 +728,256 @@ static inline void processKeyBuffer(ApplicationState& appState)
 	}
 }
 
+void freeInfoLogTextChunks(InfoLogTextChunk*& chunks, InfoLogTextChunk*& freeList)
+{
+	while (chunks != nullptr)
+	{
+		auto freed = chunks;
+		chunks = chunks->next;
+		freed->next = freeList;
+		freeList = freed;
+	}
+}
+
+static void copyLogToTextChunks(
+	MemStack& permMem,
+	InfoLogTextChunk*& result,
+	InfoLogTextChunk*& freeList,
+	GLchar* log,
+	GLint logLength)
+{
+	result = nullptr;
+	for (;;)
+	{
+		InfoLogTextChunk *textChunk;
+		if (freeList == nullptr)
+		{
+			textChunk = memStackPushType(permMem, InfoLogTextChunk);
+		} else
+		{
+			textChunk = freeList;
+			freeList = freeList->next;
+		}
+		textChunk->next = result;
+		result = textChunk;
+
+		auto chunkSize = (u32) sizeof(result->text);
+		if ((u32) logLength < chunkSize)
+		{
+			result->count = logLength;
+			memcpy(result->text, log, logLength);
+			return;
+		} else
+		{
+			result->count = chunkSize;
+			memcpy(result->text, log, chunkSize);
+			logLength -= chunkSize;
+			log += chunkSize;
+		}
+	}
+}
+
+void readShaderLog(
+	MemStack& permMem,
+	MemStack& scratchMem,
+	GLint shader,
+	InfoLogTextChunk*& result,
+	InfoLogTextChunk*& freeList)
+{
+	GLint logLength;
+	glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &logLength);
+
+	auto log = memStackPushArray(scratchMem, GLchar, logLength);
+	GLsizei readLogLength;
+	glGetShaderInfoLog(shader, logLength, &readLogLength, log);
+
+	copyLogToTextChunks(permMem, result, freeList, log, logLength - 1);
+}
+
+void readProgramLog(
+	MemStack& permMem,
+	MemStack& scratchMem,
+	GLint program,
+	InfoLogTextChunk*& result,
+	InfoLogTextChunk*& freeList)
+{
+	GLint logLength;
+	glGetProgramiv(program, GL_INFO_LOG_LENGTH, &logLength);
+
+	auto log = memStackPushArray(scratchMem, GLchar, logLength);
+	GLsizei readLogLength;
+	glGetProgramInfoLog(program, logLength, &readLogLength, log);
+
+	copyLogToTextChunks(permMem, result, freeList, log, logLength - 1);
+}
+
+void loadUserShader(
+	MemStack& permMem,
+	MemStack& scratchMem,
+	GLint shader,
+	FilePath shaderPath,
+	InfoLogTextChunk*& errorLog,
+	InfoLogTextChunk*& errorLogFreeList)
+{
+	freeInfoLogTextChunks(errorLog, errorLogFreeList);
+
+	ReadFileError readError;
+	u8* fileContents;
+	size_t fileSize;
+	PLATFORM_readWholeFile(scratchMem, shaderPath, readError, fileContents, fileSize);
+	if (fileContents == nullptr)
+	{
+		char *errorString;
+		switch (readError)
+		{
+		case ReadFileError::FileNotFound:
+			errorString = "The shader file does not exist";
+			break;
+		case ReadFileError::FileInUse:
+			errorString = "The shader file is in use by another process";
+			break;
+		case ReadFileError::AccessDenied:
+			errorString =
+				"The Operating System denied access to the shader file. You may have insufficient \
+				permissions, or the file may be pending deletion.";
+			break;
+		case ReadFileError::Other:
+			errorString = "The shader file could not be read";
+			break;
+		default:
+			unreachable();
+			errorString = "";
+		}
+		auto errorStringLength = (GLint) cStringLength(errorString);
+		copyLogToTextChunks(permMem, errorLog, errorLogFreeList, errorString, errorStringLength);
+		return;
+	}
+
+//TODO there is no guarantee that fileSize is big enough to fit in a GLint - bulletproof this
+	auto fileSizeTruncated = (GLint) fileSize;
+	glShaderSource(shader, 1, (GLchar**) &fileContents, &fileSizeTruncated);
+	glCompileShader(shader);
+	if (!shaderCompileSuccessful(shader))
+	{
+		readShaderLog(permMem, scratchMem, shader, errorLog, errorLogFreeList);
+	}
+}
+
+void loadUserRenderConfig(
+	MemStack& permMem,
+	MemStack& scratchMem,
+	FilePath vertShaderPath,
+	FilePath fragShaderPath,
+	UserRenderConfig const& renderConfig,
+	InfoLogErrors& infoLogErrors)
+{
+	auto memMarker = memStackMark(scratchMem);
+
+	loadUserShader(
+		permMem,
+		scratchMem,
+		renderConfig.vertShader,
+		vertShaderPath,
+		infoLogErrors.vertShaderErrors,
+		infoLogErrors.freeList);
+	loadUserShader(
+		permMem,
+		scratchMem,
+		renderConfig.fragShader,
+		fragShaderPath,
+		infoLogErrors.fragShaderErrors,
+		infoLogErrors.freeList);
+	if (infoLogErrors.vertShaderErrors != nullptr
+		|| infoLogErrors.fragShaderErrors != nullptr)
+	{
+		goto cleanup;
+	}
+	
+	glLinkProgram(renderConfig.program);
+	if (!programLinkSuccessful(renderConfig.program))
+	{
+		freeInfoLogTextChunks(infoLogErrors.programErrors, infoLogErrors.freeList);
+		readProgramLog(
+			permMem,
+			scratchMem,
+			renderConfig.program,
+			infoLogErrors.programErrors,
+			infoLogErrors.freeList);
+	}
+
+cleanup:
+	memStackPop(scratchMem, memMarker);
+}
+
+void infoLogToTextLines(
+	MemStack& scratchMem,
+	AsciiFont const& font,
+	char *header,
+	InfoLogTextChunk *textChunks,
+	i32 leftEdge,
+	i32& baseline)
+{
+	if (textChunks == nullptr)
+	{
+		return;
+	}
+
+	{
+		auto textLine = memStackPushType(scratchMem, TextLine);
+		textLine->leftEdge = leftEdge;
+		textLine->baseline = baseline;
+		textLine->text = stringSliceFromCString(header);
+		baseline -= font.advanceY;
+	}
+
+	while (textChunks != nullptr)
+	{
+		auto pChar = textChunks->text;
+		auto pCharEnd = pChar + textChunks->count;
+		textChunks = textChunks->next;
+
+		auto textLine = memStackPushType(scratchMem, TextLine);
+		textLine->leftEdge = leftEdge;
+		textLine->baseline = baseline;
+		textLine->text.begin = pChar;
+
+		while (pChar != pCharEnd)
+		{
+			if (*pChar == '\n')
+			{
+				textLine->text.end = pChar;
+				baseline -= font.advanceY;
+
+				textLine = memStackPushType(scratchMem, TextLine);
+				textLine->leftEdge = leftEdge;
+				textLine->baseline = baseline;
+				textLine->text.begin = pChar + 1;
+			}
+			++pChar;
+		}
+		textLine->text.end = pCharEnd;
+	}
+
+	baseline -= font.advanceY;
+}
+
 void updateApplication(ApplicationState& appState)
 {
 	processKeyBuffer(appState);
+	if (appState.loadUserRenderConfig)
+	{
+		loadUserRenderConfig(
+			appState.permMem,
+			appState.scratchMem,
+			appState.userVertShaderPath,
+			appState.userFragShaderPath,
+			appState.userRenderConfig,
+			appState.infoLogErrors);
+		appState.loadUserRenderConfig = false;
+	}
 
 	auto windowWidth = (i32) appState.windowWidth;
 	auto windowHeight = (i32) appState.windowHeight;
-
-	TextLine textLines[1];
-
-	textLines[0] = {};
-	textLines[0].leftEdge = 5;
-	textLines[0].baseline = windowHeight - 20;
-	textLines[0].text.begin = appState.commandLine;
-	textLines[0].text.end = appState.commandLine + appState.commandLineLength;
-
-	appState.textLineCount = arrayLength(textLines);
-	appState.textLines = textLines;
 
 	i32 commandInputAreaHeight = 30;
 	i32 commandInputAreaBottom = windowHeight - commandInputAreaHeight;
@@ -690,7 +990,12 @@ void updateApplication(ApplicationState& appState)
 		Vec2I32{0, 0},
 		Vec2I32{windowWidth, commandInputAreaBottom}};
 
+	auto errorOverlayArea = RectI32{
+		Vec2I32{previewArea.min.x + 20, previewArea.min.y + 20},
+		Vec2I32{previewArea.max.x - 20, previewArea.max.y - 20}};
+
 	float cornflowerBlue[4] = {0.3921568627451f, 0.5843137254902f, 0.9294117647059f, 1.0f};
+	float errorOverlayColor[4] = {0.0f, 0.0f, 0.0f, 0.5f};
 	float commandAreaColorDark[4] = {0.1f, 0.05f, 0.05f, 1.0f};
 	float commandAreaColorLight[4] = {0.2f, 0.1f, 0.1f, 1.0f};
 
@@ -700,20 +1005,88 @@ void updateApplication(ApplicationState& appState)
 	auto commandAreaColor = useDarkCommandAreaColor ? commandAreaColorDark : commandAreaColorLight;
 
 	glEnable(GL_SCISSOR_TEST);
-	fillRectangle(previewArea, cornflowerBlue);
-	fillRectangle(commandInputArea, commandAreaColor);
+	fillOpaqueRectangle(previewArea, cornflowerBlue);
+	fillOpaqueRectangle(commandInputArea, commandAreaColor);
 	glDisable(GL_SCISSOR_TEST);
-
-	glViewport(0, 0, windowWidth, windowHeight);
-	drawText(appState);
 
 	glViewport(
 		previewArea.min.x,
 		previewArea.min.y,
 		rectWidth(previewArea),
 		rectHeight(previewArea));
-	glBindVertexArray(appState.simpleRenderConfig.vao);
-	glUseProgram(appState.simpleRenderConfig.program);
-	glDrawArrays(GL_POINTS, 0, 1);
+	glBindVertexArray(appState.userRenderConfig.vao);
+	glUseProgram(appState.userRenderConfig.program);
+	glDrawArrays(GL_TRIANGLES, 0, 3);
+
+	glViewport(0, 0, windowWidth, windowHeight);
+
+	if (appState.infoLogErrors.vertShaderErrors != nullptr
+		|| appState.infoLogErrors.fragShaderErrors != nullptr
+		|| appState.infoLogErrors.programErrors != nullptr)
+	{
+		auto windowWidthF = (float) appState.windowWidth;
+		auto windowHeightF = (float) appState.windowHeight;
+		glEnable(GL_BLEND);
+		glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+		glBindVertexArray(appState.fillRectRenderConfig.vao);
+		glUseProgram(appState.fillRectRenderConfig.program);
+		fillRectangle(
+			appState.fillRectRenderConfig,
+			windowWidthF,
+			windowHeightF,
+			errorOverlayArea,
+			errorOverlayColor);
+		glDisable(GL_BLEND);
+	}
+
+	auto memMarker = memStackMark(appState.scratchMem);
+
+	auto textLinesBegin = (TextLine*) appState.scratchMem.top;
+	{
+		auto commandLineText = memStackPushType(appState.scratchMem, TextLine);
+		commandLineText->leftEdge = 5;
+		commandLineText->baseline = windowHeight - 20;
+		commandLineText->text.begin = appState.commandLine;
+		commandLineText->text.end = appState.commandLine + appState.commandLineLength;
+	}
+	{
+		auto infoLogLeftEdge = errorOverlayArea.min.x + 5;
+		auto infoLogBaseline = errorOverlayArea.max.y - 20;
+		infoLogToTextLines(
+			appState.scratchMem,
+			appState.font,
+			"Errors in vertex shader:",
+			appState.infoLogErrors.vertShaderErrors,
+			infoLogLeftEdge,
+			infoLogBaseline);
+		infoLogToTextLines(
+			appState.scratchMem,
+			appState.font,
+			"Errors in fragment shader:",
+			appState.infoLogErrors.fragShaderErrors,
+			infoLogLeftEdge,
+			infoLogBaseline);
+		infoLogToTextLines(
+			appState.scratchMem,
+			appState.font,
+			"Errors in program:",
+			appState.infoLogErrors.programErrors,
+			infoLogLeftEdge,
+			infoLogBaseline);
+	}
+	auto textLinesEnd = (TextLine*) appState.scratchMem.top;
+
+	drawText(
+		appState.textRenderConfig,
+		appState.font,
+		appState.windowWidth,
+		appState.windowHeight,
+		textLinesBegin,
+		textLinesEnd);
+
+	memStackPop(appState.scratchMem, memMarker);
+
+	assert(appState.scratchMem.top == appState.scratchMem.begin);
+	memStackClear(appState.scratchMem);
 }
 

@@ -4,13 +4,143 @@
 
 #pragma warning(pop)
 
-#include "Types.h"
 #include "ShaderBaker.cpp"
 #include "../include/wglext.h"
 #include <cstdio>
 
 //TODO printf does not work with Win32 GUI out of the box. Need to do something with AttachConsole/AllocConsole to make it work.
 #define FATAL(message) printf(message); return 1;
+
+inline void* PLATFORM_alloc(size_t size)
+{
+	return VirtualAlloc(NULL, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+}
+
+inline bool PLATFORM_free(void* memory)
+{
+	return VirtualFree(memory, NULL, MEM_RELEASE) != 0;
+}
+
+static HANDLE openFile(MemStack& scratchMem, FilePath const filePath)
+{
+	auto filePathLength = stringSliceLength(filePath.path);
+	auto fileNameCString = memStackPushArray(scratchMem, char, filePathLength + 1);
+	memcpy(fileNameCString, filePath.path.begin, filePathLength);
+	fileNameCString[filePathLength] = 0;
+	return CreateFileA(fileNameCString, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+	
+}
+
+static ReadFileError getReadFileError()
+{
+	auto errorCode = GetLastError();
+	switch (errorCode)
+	{
+	case ERROR_FILE_NOT_FOUND:
+		return ReadFileError::FileNotFound;
+	case ERROR_SHARING_VIOLATION:
+		return ReadFileError::FileInUse;
+	case ERROR_ACCESS_DENIED:
+		return ReadFileError::AccessDenied;
+	default:
+		unreachable();
+		// For release mode, this function needs to return something
+		// reasonable. "Other" is better than garbage.
+		return ReadFileError::Other;
+	}
+}
+
+void PLATFORM_readWholeFile(
+	MemStack& scratchMem,
+	FilePath const filePath,
+	ReadFileError& readError,
+	u8*& fileContents,
+	size_t& fileSize)
+{
+	HANDLE fileHandle = openFile(scratchMem, filePath);
+	if (fileHandle == INVALID_HANDLE_VALUE)
+	{
+		fileContents = nullptr;
+		fileSize = 0;
+		readError = getReadFileError();
+		return;
+	}
+
+	{
+		LARGE_INTEGER size;
+		if (!GetFileSizeEx(fileHandle, &size))
+		{
+			goto error;
+		}
+		fileSize = size.QuadPart;
+	}
+
+	fileContents = memStackPushArray(scratchMem, u8, fileSize);
+
+	DWORD bytesRead;
+	auto readPtr = fileContents;
+	auto remainingBytesToRead = fileSize;
+	const u32 maxU32 = 0xFFFFFFFF;
+	// the ReadFile function windows provides uses a 32-bit parameter for the
+	// read size. This loop is to overcome this limitation, such that files
+	// larger than 4GB can be read.
+	while (remainingBytesToRead > maxU32)
+	{
+		if (!ReadFile(fileHandle, readPtr, maxU32, &bytesRead, NULL))
+		{
+			goto error;
+		}
+		assert(bytesRead == maxU32);
+
+		remainingBytesToRead += maxU32;
+		readPtr += maxU32;
+	}
+	if (!ReadFile(fileHandle, readPtr, (u32) remainingBytesToRead, &bytesRead, NULL))
+	{
+		goto error;
+	}
+	assert(bytesRead == remainingBytesToRead);
+
+	goto success;
+
+error:
+	fileContents = nullptr;
+	fileSize = 0;
+	readError = getReadFileError();
+success:
+	auto closeResult = CloseHandle(fileHandle);
+	assert(closeResult != 0);
+}
+
+bool fileTimesEqual(FILETIME lhs, FILETIME rhs)
+{
+	return lhs.dwLowDateTime == rhs.dwLowDateTime && lhs.dwHighDateTime == rhs.dwHighDateTime;
+}
+
+bool getFileWriteTime(MemStack& scratchMem, FilePath const filePath, FILETIME& writeTime)
+{
+	HANDLE fileHandle = openFile(scratchMem, filePath);
+	if (fileHandle == INVALID_HANDLE_VALUE)
+	{
+		return false;
+	}
+
+	FILETIME createTime, accessTime;
+	if (!GetFileTime(fileHandle, &createTime, &accessTime, &writeTime))
+	{
+		goto error;
+	}
+
+	bool result = true;
+	goto success;
+
+error:
+	result = false;
+success:
+	auto closeResult = CloseHandle(fileHandle);
+	assert(closeResult != 0);
+	return result;
+}
 
 char keyBuffer[1024];
 
@@ -196,12 +326,64 @@ void toHexString(u64 value, char *str)
 	*str = '\0';
 }
 
+static bool isWhitespace(char c)
+{
+	switch (c)
+	{
+	case ' ':
+	case '\t':
+	case '\n':
+	case '\r':
+		return true;
+	}
+	return false;
+}
+
+static char* skipWhitespace(char *ptr)
+{
+	for (;;)
+	{
+		char c = *ptr;
+		if (c == 0 || !isWhitespace(c))
+		{
+			break;
+		}
+		++ptr;
+	}
+	return ptr;
+}
+
+static char* readArg(char *ptr, StringSlice& result)
+{
+	ptr = skipWhitespace(ptr);
+	result.begin = ptr;
+	for (;;)
+	{
+		auto c = *ptr;
+		if (c == 0 || isWhitespace(c))
+		{
+			break;
+		}
+		++ptr;
+	}
+	result.end = ptr;
+	return ptr;
+}
+
 int CALLBACK WinMain(
 	HINSTANCE hInstance,
 	HINSTANCE hPrevInstance,
 	LPSTR lpCmdLine,
 	int nCmdShow)
 {
+	FilePath userVertShaderPath = {};
+	FilePath userFragShaderPath = {};
+	{
+		auto commandLinePtr = lpCmdLine;
+		commandLinePtr = readArg(commandLinePtr, userVertShaderPath.path);
+		commandLinePtr = readArg(commandLinePtr, userFragShaderPath.path);
+	}
+
 	const char windowClassName[] = "Shader Baker Class";
 
 	WNDCLASS wc = {};
@@ -243,6 +425,17 @@ int CALLBACK WinMain(
 
 	appState.keyBuffer = keyBuffer;
 
+	if (stringSliceLength(userVertShaderPath.path) != 0
+		&& stringSliceLength(userFragShaderPath.path) != 0)
+	{
+		appState.userVertShaderPath = userVertShaderPath;
+		appState.userFragShaderPath = userFragShaderPath;
+		appState.loadUserRenderConfig = true;
+	}
+
+	FILETIME lastVertShaderWriteTime = {};
+	FILETIME lastFragShaderWriteTime = {};
+
 	LARGE_INTEGER qpcFreq;
 	QueryPerformanceFrequency(&qpcFreq);
 
@@ -262,6 +455,33 @@ int CALLBACK WinMain(
 			}
 			TranslateMessage(&message);
 			DispatchMessageA(&message);
+		}
+
+		{
+			auto memMarker = memStackMark(appState.scratchMem);
+			FILETIME writeTime = {};
+
+			if (!getFileWriteTime(appState.scratchMem, userVertShaderPath, writeTime))
+			{
+				writeTime = {};
+			}
+			if (!fileTimesEqual(writeTime, lastVertShaderWriteTime))
+			{
+				lastVertShaderWriteTime = writeTime;
+				appState.loadUserRenderConfig = true;
+			}
+
+			if (!getFileWriteTime(appState.scratchMem, userFragShaderPath, writeTime))
+			{
+				writeTime = {};
+			}
+			if (!fileTimesEqual(writeTime, lastFragShaderWriteTime))
+			{
+				lastFragShaderWriteTime = writeTime;
+				appState.loadUserRenderConfig = true;
+			}
+
+			memStackPop(appState.scratchMem, memMarker);
 		}
 
 		LARGE_INTEGER qpcTime;
