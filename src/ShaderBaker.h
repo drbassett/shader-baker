@@ -15,6 +15,12 @@ struct StringSlice
 	char *begin, *end;
 };
 
+/// Represents a string with a size and characters packed together in memory contiguously
+struct PackedString
+{
+	void *ptr;
+};
+
 struct TextLine
 {
 	i32 leftEdge, baseline;

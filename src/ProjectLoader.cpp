@@ -248,7 +248,7 @@ static bool parseProgram(MemStack& mem, ProjectParser& parser)
 	{
 		if (parser.cursor == parser.end)
 		{
-			addError(mem, parser, programLocation, ParseProjectErrorType::IncompleteProgramStatement);
+			addError(mem, parser, programLocation, ParseProjectErrorType::ProgramMissingShaderList);
 			return false;
 		}
 
@@ -316,7 +316,7 @@ static bool parseProgram(MemStack& mem, ProjectParser& parser)
 	}
 }
 
-Project parseProject(MemStack& mem, StringSlice projectText, ParseProjectError*& parseErrors)
+Project parseProject(MemStack& permMem, MemStack& scratchMem, StringSlice projectText, ParseProjectError*& parseErrors)
 {
 	ProjectParser parser = {};
 	parser.cursor = projectText.begin;
@@ -326,15 +326,15 @@ Project parseProject(MemStack& mem, StringSlice projectText, ParseProjectError*&
 
 	Project project = {};
 
+	Version version;
 	{
 		auto versionToken = readToken(parser);
 		if (versionToken.str != "Version")
 		{
-			addError(mem, parser, versionToken.location, ParseProjectErrorType::MissingVersionStatement);
+			addError(scratchMem, parser, versionToken.location, ParseProjectErrorType::MissingVersionStatement);
 			goto returnResult;
 		}
 	}
-
 	{
 		auto versionNumberToken = readToken(parser);
 		auto tokenLocation = versionNumberToken.location;
@@ -343,7 +343,7 @@ Project parseProject(MemStack& mem, StringSlice projectText, ParseProjectError*&
 		{
 			if (pDot == versionNumberToken.str.end)
 			{
-				addError(mem, parser, tokenLocation, ParseProjectErrorType::VersionInvalidFormat);
+				addError(scratchMem, parser, tokenLocation, ParseProjectErrorType::VersionInvalidFormat);
 				goto returnResult;
 			}
 			
@@ -359,12 +359,12 @@ Project parseProject(MemStack& mem, StringSlice projectText, ParseProjectError*&
 
 		if (pFirstDot == versionNumberToken.str.begin)
 		{
-			addError(mem, parser, tokenLocation, ParseProjectErrorType::VersionInvalidFormat);
+			addError(scratchMem, parser, tokenLocation, ParseProjectErrorType::VersionInvalidFormat);
 			goto returnResult;
 		}
 		if (pFirstDot + 1 == versionNumberToken.str.end)
 		{
-			addError(mem, parser, tokenLocation, ParseProjectErrorType::VersionInvalidFormat);
+			addError(scratchMem, parser, tokenLocation, ParseProjectErrorType::VersionInvalidFormat);
 			goto returnResult;
 		}
 
@@ -378,7 +378,7 @@ Project parseProject(MemStack& mem, StringSlice projectText, ParseProjectError*&
 			
 			if (*pDot == '.')
 			{
-				addError(mem, parser, tokenLocation, ParseProjectErrorType::VersionInvalidFormat);
+				addError(scratchMem, parser, tokenLocation, ParseProjectErrorType::VersionInvalidFormat);
 				goto returnResult;
 			}
 			
@@ -387,15 +387,15 @@ Project parseProject(MemStack& mem, StringSlice projectText, ParseProjectError*&
 
 		bool success = true;
 		auto majorStr = StringSlice{versionNumberToken.str.begin, pFirstDot};
-		if (!parseU32Base10(majorStr, project.version.major))
+		if (!parseU32Base10(majorStr, version.major))
 		{
-			addError(mem, parser, tokenLocation, ParseProjectErrorType::VersionInvalidFormat);
+			addError(scratchMem, parser, tokenLocation, ParseProjectErrorType::VersionInvalidFormat);
 			success = false;
 		}
 		auto minorStr = StringSlice{pFirstDot + 1, versionNumberToken.str.end};
-		if (!parseU32Base10(minorStr, project.version.minor))
+		if (!parseU32Base10(minorStr, version.minor))
 		{
-			addError(mem, parser, tokenLocation, ParseProjectErrorType::VersionInvalidFormat);
+			addError(scratchMem, parser, tokenLocation, ParseProjectErrorType::VersionInvalidFormat);
 			success = false;
 		}
 		if (!success)
@@ -403,9 +403,9 @@ Project parseProject(MemStack& mem, StringSlice projectText, ParseProjectError*&
 			goto returnResult;
 		}
 
-		if (!(project.version.major == 1 && project.version.minor == 0))
+		if (!(version.major == 1 && version.minor == 0))
 		{
-			addError(mem, parser, tokenLocation, ParseProjectErrorType::UnsupportedVersion);
+			addError(scratchMem, parser, tokenLocation, ParseProjectErrorType::UnsupportedVersion);
 			goto returnResult;
 		}
 	}
@@ -422,64 +422,161 @@ Project parseProject(MemStack& mem, StringSlice projectText, ParseProjectError*&
 
 		if (valueType.str == "VertexShader")
 		{
-			bool success = parseShader(mem, parser, ShaderType::Vertex);
+			bool success = parseShader(scratchMem, parser, ShaderType::Vertex);
+			if (!success)
+			{
+				goto returnResult;
+			}
+		} else if (valueType.str == "TessControlShader")
+		{
+			bool success = parseShader(scratchMem, parser, ShaderType::TessControl);
+			if (!success)
+			{
+				goto returnResult;
+			}
+		} else if (valueType.str == "TessEvaluationShader")
+		{
+			bool success = parseShader(scratchMem, parser, ShaderType::TessEvaluation);
+			if (!success)
+			{
+				goto returnResult;
+			}
+		} else if (valueType.str == "GeometryShader")
+		{
+			bool success = parseShader(scratchMem, parser, ShaderType::Geometry);
 			if (!success)
 			{
 				goto returnResult;
 			}
 		} else if (valueType.str == "FragmentShader")
 		{
-			bool success = parseShader(mem, parser, ShaderType::Fragment);
+			bool success = parseShader(scratchMem, parser, ShaderType::Fragment);
+			if (!success)
+			{
+				goto returnResult;
+			}
+		} else if (valueType.str == "ComputeShader")
+		{
+			bool success = parseShader(scratchMem, parser, ShaderType::Compute);
 			if (!success)
 			{
 				goto returnResult;
 			}
 		} else if (valueType.str == "Program")
 		{
-			bool success = parseProgram(mem, parser);
+			bool success = parseProgram(scratchMem, parser);
 			if (!success)
 			{
 				goto returnResult;
 			}
 		} else
 		{
-			addError(mem, parser, valueLocation, ParseProjectErrorType::UnknownValueType);
+			addError(scratchMem, parser, valueLocation, ParseProjectErrorType::UnknownValueType);
 			goto returnResult;
 		}
 	}
 
+	project.version = version;
+
 	// Copy the shaders and programs to permanent storage. Copying is done
 	// in reverse order so that arrays are in the same order as in the file.
 
-	auto shaders = memStackPushArray(mem, RawShader, parser.shaderCount);
-	if (parser.shaderCount > 0)
+//TODO consider using a temporary hashmap to do name lookups. Project files may
+// never get large enough to justify this complexity, but if the loading process
+// gets sluggish, this is something to consider.
+
+	auto shaders = memStackPushArray(permMem, Shader, parser.shaderCount);
 	{
 		auto pShader = parser.shaders;
-		auto i = parser.shaderCount - 1;
+		auto shaderIdx = parser.shaderCount - 1;
 		while (pShader != nullptr)
 		{
-			shaders[i] = *pShader;
+			shaders[shaderIdx].type = pShader->type;
+			shaders[shaderIdx].name = packString(permMem, pShader->identifier);
+			shaders[shaderIdx].source = packString(permMem, pShader->source);
+
+			// check the shader name for uniqueness
+			for (auto i = shaderIdx + 1; i < project.shaderCount; ++i)
+			{
+				if (unpackString(shaders[i].name) == pShader->identifier)
+				{
+					addError(scratchMem, parser, pShader->location, ParseProjectErrorType::DuplicateShaderName);
+					break;
+				}
+			}
+
 			pShader = pShader->next;
-			--i;
+			--shaderIdx;
 		}
 	}
 	project.shaderCount = parser.shaderCount;
 	project.shaders = shaders;
 
-	auto programs = memStackPushArray(mem, RawProgram, parser.programCount);
-	if (parser.programCount > 0)
+	auto programs = memStackPushArray(permMem, Program, parser.programCount);
 	{
 		auto pProgram = parser.programs;
-		auto i = parser.programCount - 1;
+		auto programIdx = parser.programCount - 1;
 		while (pProgram != nullptr)
 		{
-			programs[i] = *pProgram;
+			programs[programIdx].name = packString(permMem, pProgram->identifier);
+			if (pProgram->attachedShaderCount > 255)
+			{
+				addError(
+					scratchMem,
+					parser,
+					pProgram->location,
+					ParseProjectErrorType::ProgramExceedsAttachedShaderLimit);
+				programs->attachedShaderCount = 0;
+				programs->attachedShaders = nullptr;
+				continue;
+			}
+			
+			// check the program name for uniqueness
+			for (auto i = programIdx + 1; i < project.programCount; ++i)
+			{
+				if (unpackString(programs[i].name) == pProgram->identifier)
+				{
+					addError(scratchMem, parser, pProgram->location, ParseProjectErrorType::DuplicateProgramName);
+					break;
+				}
+			}
+
+			auto shaderListLength = pProgram->attachedShaderCount;
+			programs[programIdx].attachedShaderCount = (u8) shaderListLength;
+			programs[programIdx].attachedShaders = memStackPushArray(permMem, Shader*, shaderListLength);
+
+			// lookup pointers to attached shaders
+			for (u32 shaderIdx = 0; shaderIdx < shaderListLength; ++shaderIdx)
+			{
+				auto shader = pProgram->attachedShaders[shaderIdx];
+				for (u32 i = 0; i < project.shaderCount; ++i)
+				{
+					if (unpackString(project.shaders[i].name) == shader.identifier)
+					{
+						programs[programIdx].attachedShaders[shaderIdx] = project.shaders + i;
+						goto LBL_nextShader;
+					}
+				}
+				programs[programIdx].attachedShaders[shaderIdx] = nullptr;
+				addError(
+					scratchMem,
+					parser,
+					shader.location,
+					ParseProjectErrorType::ProgramUnresolvedShaderIdent);
+				LBL_nextShader:;
+			}
+
 			pProgram = pProgram->next;
-			--i;
+			--programIdx;
 		}
 	}
 	project.programCount = parser.programCount;
 	project.programs = programs;
+
+	if (parser.errors != nullptr)
+	{
+		project = {};
+	}
 
 returnResult:
 	parseErrors = parser.errors;

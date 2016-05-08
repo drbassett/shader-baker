@@ -65,11 +65,6 @@ inline size_t cStringLength(char *c)
 	return end - c;
 }
 
-inline size_t stringSliceLength(StringSlice str)
-{
-	return str.end - str.begin;
-}
-
 inline StringSlice stringSliceFromCString(char *cstr)
 {
 	StringSlice result = {};
@@ -85,6 +80,53 @@ inline StringSlice stringSliceFromCString(char *cstr)
 	}
 	result.end = cstr;
 	return result;
+}
+
+inline size_t stringSliceLength(StringSlice str)
+{
+	return str.end - str.begin;
+}
+
+bool operator==(StringSlice lhs, StringSlice rhs)
+{
+	if (stringSliceLength(lhs) != stringSliceLength(rhs))
+	{
+		return false;
+	}
+	while (lhs.begin != lhs.end)
+	{
+		if (*lhs.begin != *rhs.begin)
+		{
+			return false;
+		}
+		++lhs.begin;
+		++rhs.begin;
+	}
+	return true;
+}
+
+inline bool operator!=(StringSlice lhs, StringSlice rhs)
+{
+	return !(lhs == rhs);
+}
+
+inline PackedString packString(MemStack& mem, StringSlice str)
+{
+	size_t stringLength = stringSliceLength(str);
+	auto ptr = memStackPush(mem, sizeof(stringLength) + stringLength);
+	auto sizePtr = (size_t*) ptr;
+	auto charPtr = (char*) (sizePtr + 1);
+	*sizePtr = stringLength;
+	memcpy(charPtr, str.begin, stringLength);
+	return PackedString{ptr};
+}
+
+inline StringSlice unpackString(PackedString str)
+{
+	auto sizePtr = (size_t*) str.ptr;
+	auto begin = (char*) (sizePtr + 1);
+	auto end = begin + (*sizePtr);
+	return StringSlice{begin, end};
 }
 
 inline i32 rectWidth(RectI32 const& rect)

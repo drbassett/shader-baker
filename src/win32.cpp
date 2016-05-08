@@ -363,6 +363,9 @@ int main(char argc, char **argv)
 	MemStack scratchMem = {};
 	memStackInit(scratchMem, 1024 * 1024);
 
+	MemStack permMem = {};
+	memStackInit(permMem, 1024 * 1024);
+
 	auto projectFileName = stringSliceFromCString("../../project.sb");
 	FilePath projectFilePath{projectFileName};
 
@@ -394,8 +397,10 @@ int main(char argc, char **argv)
 				lastWriteTime = writeTime;
 
 				StringSlice projectText{(char*) fileContents, (char*) fileContents + fileSize}; 
+
+				auto permMemMarker = memStackMark(permMem);
 				ParseProjectError* parseErrors;
-				auto project = parseProject(scratchMem, projectText, parseErrors);
+				auto project = parseProject(scratchMem, permMem, projectText, parseErrors);
 
 				printf("--------------------\n");
 				if (parseErrors == nullptr)
@@ -407,6 +412,8 @@ int main(char argc, char **argv)
 					printf("Errors:\n");
 					DEBUG_printErrors(parseErrors);
 				}
+
+				memStackPop(permMem, permMemMarker);
 			}
 		}
 

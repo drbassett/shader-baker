@@ -15,7 +15,36 @@ VertexShader vertShader
 void main() { }
 ---
 
+TessControlShader tessControlShader
+---:
+#version 330
+
+void main() { }
+---
+
+TessEvaluationShader tessEvaluationShader
+---:
+#version 330
+
+void main() { }
+---
+
+GeometryShader geomShader
+---:
+#version 330
+
+void main() { }
+---
+
 FragmentShader fragShader
+---:
+#version 330
+
+void main() { }
+---
+
+
+ComputeShader computeShader
 ---:
 #version 330
 
@@ -44,5 +73,21 @@ Program progMultipleNewline2
 	vertShader
 	geomShader
 	fragShader
+}
+
+Program simpleProgram {
+	vertShader
+	fragShader
+}
+
+Program tessProgram {
+	vertShader
+	tessControlShader
+	tessEvaluationShader
+	fragShader
+}
+
+Program computeProgram {
+	computeShader
 }
 

@@ -14,7 +14,10 @@ enum struct ParseProjectErrorType
 	EmptyHereStringMarker,
 	ProgramUnclosedShaderList,
 	ProgramMissingShaderList,
-	IncompleteProgramStatement,
+	DuplicateShaderName,
+	DuplicateProgramName,
+	ProgramExceedsAttachedShaderLimit,
+	ProgramUnresolvedShaderIdent,
 };
 
 struct TextLocation
@@ -90,29 +93,45 @@ struct ProjectParser
 	ParseProjectError *errors;
 };
 
+struct Shader
+{
+	ShaderType type;
+	PackedString name;
+	PackedString source;
+};
+
+struct Program
+{
+	PackedString name;
+	// The attached shader count does not need to be a large number.
+	// Programs should have nowhere near 255 shaders attached.
+	u8 attachedShaderCount;
+	Shader **attachedShaders;
+};
+
 struct Project
 {
 	Version version;
 
-	u32 shaderCount;
-	RawShader *shaders;
-
 	u32 programCount;
-	RawProgram *programs;
+	Program *programs;
+
+	u32 shaderCount;
+	Shader *shaders;
 };
 
-Project parseProject(MemStack& mem, StringSlice projectText, ParseProjectError*& parseErrors);
+Project parseProject(MemStack& permMem, MemStack& scratchMem, StringSlice projectText, ParseProjectError*& parseErrors);
 
 char* DEBUG_errorTypeToString(ParseProjectErrorType errorType)
 {
 	switch (errorType)
 	{
 	case ParseProjectErrorType::MissingVersionStatement:
-		return "First statement should be a 'Version' statement";
+		return "First statement in document should be a 'Version' statement";
 	case ParseProjectErrorType::VersionInvalidFormat:
 		return "Version number is not correctly formatted. It should have the syntax \"Major.Minor\", where \"Major\" and \"Minor\" are numbers";
 	case ParseProjectErrorType::UnsupportedVersion:
-		return "Only version 1.0 is supported";
+		return "Unsupported version - this parser only supports version 1.0";
 	case ParseProjectErrorType::UnknownValueType:
 		return "Unknown type for value";
 	case ParseProjectErrorType::MissingHereStringMarker:
@@ -120,19 +139,25 @@ char* DEBUG_errorTypeToString(ParseProjectErrorType errorType)
 	case ParseProjectErrorType::UnclosedHereStringMarker:
 		return "Unclosed here string marker. Markers must be closed with a ':'";
 	case ParseProjectErrorType::HereStringMarkerWhitespace:
-		return "Here string markers cannot contain whitespace";
+		return "Here string markers contains whitespace";
 	case ParseProjectErrorType::EmptyHereStringMarker:
 		return "Here string marker is empty";
 	case ParseProjectErrorType::UnclosedHereString:
-		return "Here string not closed. Make sure the marker for it ends with a ':'";
+		return "Here string not closed. Make sure its marker ends with a ':'";
 	case ParseProjectErrorType::ShaderMissingIdentifier:
 		return "Expected name for shader";
 	case ParseProjectErrorType::ProgramMissingShaderList:
 		return "Expected a shader list to follow the program name";
 	case ParseProjectErrorType::ProgramUnclosedShaderList:
-		return "Unclosed program shader list";
-	case ParseProjectErrorType::IncompleteProgramStatement:
-		return "Incomplete program statement at end of input";
+		return "Unclosed attached shader list";
+	case ParseProjectErrorType::DuplicateShaderName:
+		return "Another shader in this project has the same name";
+	case ParseProjectErrorType::DuplicateProgramName:
+		return "Another program in this project has the same name";
+	case ParseProjectErrorType::ProgramExceedsAttachedShaderLimit:
+		return "Programs cannot have more than 255 shaders attached";
+	case ParseProjectErrorType::ProgramUnresolvedShaderIdent:
+		return "No shader with this name exists in this project";
 	default:
 		unreachable();
 		return "???";
@@ -141,7 +166,7 @@ char* DEBUG_errorTypeToString(ParseProjectErrorType errorType)
 
 void DEBUG_printErrors(ParseProjectError* errors)
 {
-	int errorNumber = 1;
+	u32 errorNumber = 1;
 	while (errors != nullptr)
 	{
 		printf(
@@ -151,6 +176,7 @@ void DEBUG_printErrors(ParseProjectError* errors)
 			errors->location.charNumber,
 			DEBUG_errorTypeToString(errors->type));
 		errors = errors->next;
+		++errorNumber;
 	}
 }
 
@@ -176,13 +202,18 @@ char* DEBUG_shaderTypeToString(ShaderType type)
 	}
 }
 
-void DEBUG_printStringSlice(StringSlice str)
+inline void DEBUG_printString(StringSlice str)
 {
 	while (str.begin != str.end)
 	{
 		putchar(*str.begin);
 		++str.begin;
 	}
+}
+
+inline void DEBUG_printString(PackedString str)
+{
+	DEBUG_printString(unpackString(str));
 }
 
 void DEBUG_printProject(Project& project)
@@ -193,13 +224,12 @@ void DEBUG_printProject(Project& project)
 	{
 		printf("Shaders:\n");
 	}
-	for (u32 i = 0; i < project.shaderCount; ++i)
+	for (u32 shaderIdx = 0; shaderIdx < project.shaderCount; ++shaderIdx)
 	{
-		auto shader = project.shaders[i];
-		printf("L%d-C%d ", shader.location.lineNumber, shader.location.charNumber);
-		DEBUG_printStringSlice(shader.identifier);
+		auto shader = project.shaders[shaderIdx];
+		DEBUG_printString(shader.name);
 		printf(" (%s shader):\n>>>", DEBUG_shaderTypeToString(shader.type));
-		DEBUG_printStringSlice(shader.source);
+		DEBUG_printString(shader.source);
 		fputs(">>>\n\n", stdout);
 	}
 
@@ -207,21 +237,20 @@ void DEBUG_printProject(Project& project)
 	{
 		printf("Programs:\n");
 	}
-	for (u32 i = 0; i < project.programCount; ++i)
+	for (u32 programIdx = 0; programIdx < project.programCount; ++programIdx)
 	{
-		auto program = project.programs[i];
-		printf("L%d-C%d ", program.location.lineNumber, program.location.charNumber);
-		DEBUG_printStringSlice(program.identifier);
+		auto program = project.programs[programIdx];
+		DEBUG_printString(program.name);
 		fputs(" (Program): ", stdout);
 
 		if (program.attachedShaderCount > 0)
 		{
-			DEBUG_printStringSlice(program.attachedShaders[0].identifier);
+			DEBUG_printString(program.attachedShaders[0]->name);
 		}
-		for (u32 j = 1; j < program.attachedShaderCount; ++j)
+		for (u32 shaderIdx = 1; shaderIdx < program.attachedShaderCount; ++shaderIdx)
 		{
 			fputs(", ", stdout);
-			DEBUG_printStringSlice(program.attachedShaders[j].identifier);
+			DEBUG_printString(program.attachedShaders[shaderIdx]->name);
 		}
 		putchar('\n');
 	}
