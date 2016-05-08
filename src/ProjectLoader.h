@@ -3,12 +3,7 @@
 enum struct ParseProjectErrorType
 {
 	MissingVersionStatement,
-	VersionMissingDot,
-	VersionMissingMinor,
-	VersionMissingMajor,
-	VersionExtraDot,
-	VersionMajorNumberInvalid,
-	VersionMinorNumberInvalid,
+	VersionInvalidFormat,
 	UnsupportedVersion,
 	UnknownValueType,
 	ShaderMissingIdentifier,
@@ -26,6 +21,12 @@ struct TextLocation
 {
 	char *srcPtr;
 	u32 lineNumber, charNumber;
+};
+
+struct Token
+{
+	TextLocation location;
+	StringSlice str;
 };
 
 struct ParseProjectError
@@ -108,18 +109,8 @@ char* DEBUG_errorTypeToString(ParseProjectErrorType errorType)
 	{
 	case ParseProjectErrorType::MissingVersionStatement:
 		return "First statement should be a 'Version' statement";
-	case ParseProjectErrorType::VersionMissingDot:
-		return "Version missing dot separator character '.'";
-	case ParseProjectErrorType::VersionMissingMinor:
-		return "Version missing minor version";
-	case ParseProjectErrorType::VersionMissingMajor:
-		return "Version missing major version";
-	case ParseProjectErrorType::VersionExtraDot:
-		return "Extra dot separator characters '.' in version";
-	case ParseProjectErrorType::VersionMajorNumberInvalid:
-		return "Major version is not a valid number";
-	case ParseProjectErrorType::VersionMinorNumberInvalid:
-		return "Minor version is not a valid number";
+	case ParseProjectErrorType::VersionInvalidFormat:
+		return "Version number is not correctly formatted. It should have the syntax \"Major.Minor\", where \"Major\" and \"Minor\" are numbers";
 	case ParseProjectErrorType::UnsupportedVersion:
 		return "Only version 1.0 is supported";
 	case ParseProjectErrorType::UnknownValueType:

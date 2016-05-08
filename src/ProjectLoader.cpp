@@ -2,22 +2,14 @@
 
 //TODO consider restricting the available characters for identifiers
 
-inline static TextLocation parserTextLocation(ProjectParser& parser, char *pChar)
-{
-	auto charNumber = (u32) (pChar - parser.lineBegin + 1);
-	return TextLocation{pChar, parser.lineNumber, charNumber};
-}
-
 inline static TextLocation parserTextLocation(ProjectParser& parser)
 {
-	return parserTextLocation(parser, parser.cursor);
+	auto charNumber = (u32) (parser.cursor - parser.lineBegin + 1);
+	return TextLocation{parser.cursor, parser.lineNumber, charNumber};
 }
 
 inline static void addError(
-	MemStack& mem,
-	ProjectParser& parser,
-	TextLocation location,
-	ParseProjectErrorType errorType)
+	MemStack& mem, ProjectParser& parser, TextLocation location, ParseProjectErrorType errorType)
 {
 	auto error = memStackPushType(mem, ParseProjectError);
 	error->type = errorType;
@@ -26,19 +18,7 @@ inline static void addError(
 	parser.errors = error;
 }
 
-inline static void addError(
-	MemStack& mem,
-	ProjectParser& parser,
-	char *pChar,
-	ParseProjectErrorType errorType)
-{
-	addError(mem, parser, parserTextLocation(parser, pChar), errorType);
-} 
-
-inline static void addError(
-	MemStack& mem,
-	ProjectParser& parser,
-	ParseProjectErrorType errorType)
+inline static void addError(MemStack& mem, ProjectParser& parser, ParseProjectErrorType errorType)
 {
 	addError(mem, parser, parserTextLocation(parser), errorType);
 } 
@@ -98,18 +78,20 @@ static void skipWhitespace(ProjectParser& parser)
 	}
 }
 
-static StringSlice readToken(ProjectParser& parser)
+static Token readToken(ProjectParser& parser)
 {
 	skipWhitespace(parser);
 
-	StringSlice token = {};
-	token.begin = parser.cursor;
+	Token result = {};
+	result.location = parserTextLocation(parser);
+
+	result.str.begin = parser.cursor;
 	while (parser.cursor != parser.end && !isWhitespace(*parser.cursor))
 	{
 		++parser.cursor;
 	}
-	token.end = parser.cursor;
-	return token;
+	result.str.end = parser.cursor;
+	return result;
 }
 
 static bool parseU32Base10(StringSlice str, u32& result)
@@ -210,11 +192,10 @@ static bool readHereString(MemStack& mem, ProjectParser& parser, StringSlice& re
 
 static bool parseShader(MemStack& mem, ProjectParser& parser, ShaderType shaderType)
 {
-	auto shaderIdentifier = readToken(parser);
-	auto shaderLocation = parserTextLocation(parser, shaderIdentifier.begin);
-	if (stringSliceLength(shaderIdentifier) == 0)
+	auto shaderToken = readToken(parser);
+	if (stringSliceLength(shaderToken.str) == 0)
 	{
-		addError(mem, parser, shaderLocation, ParseProjectErrorType::ShaderMissingIdentifier);
+		addError(mem, parser, shaderToken.location, ParseProjectErrorType::ShaderMissingIdentifier);
 		return false;
 	}
 	skipWhitespace(parser);
@@ -226,8 +207,8 @@ static bool parseShader(MemStack& mem, ProjectParser& parser, ShaderType shaderT
 	}
 	
 	auto shader = memStackPushType(mem, RawShader);
-	shader->location = shaderLocation;
-	shader->identifier = shaderIdentifier;
+	shader->location = shaderToken.location;
+	shader->identifier = shaderToken.str;
 	shader->type = shaderType;
 	shader->source = shaderSource;
 	shader->next = parser.shaders;
@@ -237,13 +218,13 @@ static bool parseShader(MemStack& mem, ProjectParser& parser, ShaderType shaderT
 }
 
 inline static void attachShaderToProgram(
-	MemStack& mem, ProjectParser& parser, RawProgram& program, char *identifierBegin)
+	MemStack& mem, ProjectParser& parser, RawProgram& program, TextLocation identifierLocation)
 {
-	assert(identifierBegin != parser.cursor);
+	assert(identifierLocation.srcPtr != parser.cursor);
 
 	auto shader = memStackPushType(mem, RawAttachedShader);
-	shader->location = parserTextLocation(parser, identifierBegin);
-	shader->identifier.begin = identifierBegin;
+	shader->location = identifierLocation;
+	shader->identifier.begin = identifierLocation.srcPtr;
 	shader->identifier.end = parser.cursor;
 	++program.attachedShaderCount;
 }
@@ -267,7 +248,7 @@ static bool parseProgram(MemStack& mem, ProjectParser& parser)
 	{
 		if (parser.cursor == parser.end)
 		{
-			addError(mem, parser, ParseProjectErrorType::IncompleteProgramStatement);
+			addError(mem, parser, programLocation, ParseProjectErrorType::IncompleteProgramStatement);
 			return false;
 		}
 
@@ -283,7 +264,7 @@ static bool parseProgram(MemStack& mem, ProjectParser& parser)
 			skipWhitespace(parser);
 			if (parser.cursor == parser.end || *parser.cursor != '{')
 			{
-				addError(mem, parser, program->identifier.end, ParseProjectErrorType::ProgramMissingShaderList);
+				addError(mem, parser, programLocation, ParseProjectErrorType::ProgramMissingShaderList);
 				return false;
 			}
 			break;
@@ -300,6 +281,7 @@ static bool parseProgram(MemStack& mem, ProjectParser& parser)
 	for (;;)
 	{
 		auto shaderIdentifierBegin = parser.cursor;
+		auto textLocation = parserTextLocation(parser);
 
 		for (;;)
 		{
@@ -316,7 +298,7 @@ static bool parseProgram(MemStack& mem, ProjectParser& parser)
 				// attached to the program.
 				if (parser.cursor != shaderIdentifierBegin)
 				{
-					attachShaderToProgram(mem, parser, *program, shaderIdentifierBegin);
+					attachShaderToProgram(mem, parser, *program, textLocation);
 				}
 				++parser.cursor;
 				return true;
@@ -324,7 +306,7 @@ static bool parseProgram(MemStack& mem, ProjectParser& parser)
 
 			if (isWhitespace(*parser.cursor))
 			{
-				attachShaderToProgram(mem, parser, *program, shaderIdentifierBegin);
+				attachShaderToProgram(mem, parser, *program, textLocation);
 				skipWhitespace(parser);
 				break;
 			}
@@ -346,21 +328,22 @@ Project parseProject(MemStack& mem, StringSlice projectText, ParseProjectError*&
 
 	{
 		auto versionToken = readToken(parser);
-		if (versionToken != "Version")
+		if (versionToken.str != "Version")
 		{
-			addError(mem, parser, versionToken.begin, ParseProjectErrorType::MissingVersionStatement);
+			addError(mem, parser, versionToken.location, ParseProjectErrorType::MissingVersionStatement);
 			goto returnResult;
 		}
 	}
 
 	{
 		auto versionNumberToken = readToken(parser);
-		char *pDot = versionNumberToken.begin;
+		auto tokenLocation = versionNumberToken.location;
+		char *pDot = versionNumberToken.str.begin;
 		for (;;)
 		{
-			if (pDot == versionNumberToken.end)
+			if (pDot == versionNumberToken.str.end)
 			{
-				addError(mem, parser, versionNumberToken.begin, ParseProjectErrorType::VersionMissingDot);
+				addError(mem, parser, tokenLocation, ParseProjectErrorType::VersionInvalidFormat);
 				goto returnResult;
 			}
 			
@@ -374,28 +357,28 @@ Project parseProject(MemStack& mem, StringSlice projectText, ParseProjectError*&
 
 		char *pFirstDot = pDot;
 
-		if (pFirstDot == versionNumberToken.begin)
+		if (pFirstDot == versionNumberToken.str.begin)
 		{
-			addError(mem, parser, versionNumberToken.begin, ParseProjectErrorType::VersionMissingMajor);
+			addError(mem, parser, tokenLocation, ParseProjectErrorType::VersionInvalidFormat);
 			goto returnResult;
 		}
-		if (pFirstDot + 1 == versionNumberToken.end)
+		if (pFirstDot + 1 == versionNumberToken.str.end)
 		{
-			addError(mem, parser, pFirstDot, ParseProjectErrorType::VersionMissingMinor);
+			addError(mem, parser, tokenLocation, ParseProjectErrorType::VersionInvalidFormat);
 			goto returnResult;
 		}
 
 		++pDot;
 		for (;;)
 		{
-			if (pDot == versionNumberToken.end)
+			if (pDot == versionNumberToken.str.end)
 			{
 				break;
 			}
 			
 			if (*pDot == '.')
 			{
-				addError(mem, parser, pDot, ParseProjectErrorType::VersionExtraDot);
+				addError(mem, parser, tokenLocation, ParseProjectErrorType::VersionInvalidFormat);
 				goto returnResult;
 			}
 			
@@ -403,16 +386,16 @@ Project parseProject(MemStack& mem, StringSlice projectText, ParseProjectError*&
 		}
 
 		bool success = true;
-		auto majorStr = StringSlice{versionNumberToken.begin, pFirstDot};
+		auto majorStr = StringSlice{versionNumberToken.str.begin, pFirstDot};
 		if (!parseU32Base10(majorStr, project.version.major))
 		{
-			addError(mem, parser, majorStr.begin, ParseProjectErrorType::VersionMajorNumberInvalid);
+			addError(mem, parser, tokenLocation, ParseProjectErrorType::VersionInvalidFormat);
 			success = false;
 		}
-		auto minorStr = StringSlice{pFirstDot + 1, versionNumberToken.end};
+		auto minorStr = StringSlice{pFirstDot + 1, versionNumberToken.str.end};
 		if (!parseU32Base10(minorStr, project.version.minor))
 		{
-			addError(mem, parser, minorStr.begin, ParseProjectErrorType::VersionMinorNumberInvalid);
+			addError(mem, parser, tokenLocation, ParseProjectErrorType::VersionInvalidFormat);
 			success = false;
 		}
 		if (!success)
@@ -422,7 +405,7 @@ Project parseProject(MemStack& mem, StringSlice projectText, ParseProjectError*&
 
 		if (!(project.version.major == 1 && project.version.minor == 0))
 		{
-			addError(mem, parser, versionNumberToken.begin, ParseProjectErrorType::UnsupportedVersion);
+			addError(mem, parser, tokenLocation, ParseProjectErrorType::UnsupportedVersion);
 			goto returnResult;
 		}
 	}
@@ -430,28 +413,28 @@ Project parseProject(MemStack& mem, StringSlice projectText, ParseProjectError*&
 	for (;;)
 	{
 		auto valueType = readToken(parser);
-		auto valueLocation = parserTextLocation(parser, valueType.begin);
-		if (stringSliceLength(valueType) == 0)
+		auto valueLocation = valueType.location;
+		if (stringSliceLength(valueType.str) == 0)
 		{
 			// reached the end of input
 			break;
 		}
 
-		if (valueType == "VertexShader")
+		if (valueType.str == "VertexShader")
 		{
 			bool success = parseShader(mem, parser, ShaderType::Vertex);
 			if (!success)
 			{
 				goto returnResult;
 			}
-		} else if (valueType == "FragmentShader")
+		} else if (valueType.str == "FragmentShader")
 		{
 			bool success = parseShader(mem, parser, ShaderType::Fragment);
 			if (!success)
 			{
 				goto returnResult;
 			}
-		} else if (valueType == "Program")
+		} else if (valueType.str == "Program")
 		{
 			bool success = parseProgram(mem, parser);
 			if (!success)
