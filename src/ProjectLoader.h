@@ -54,28 +54,28 @@ enum struct ShaderType
 	Compute,
 };
 
-struct RawShader
+struct ShaderToken
 {
 	TextLocation location;
 	StringSlice identifier;
 	ShaderType type;
 	StringSlice source;
-	RawShader *next;
+	ShaderToken *next;
 };
 
-struct RawAttachedShader
+struct AttachedShaderToken
 {
 	TextLocation location;
 	StringSlice identifier;
 };
 
-struct RawProgram
+struct ProgramToken
 {
 	TextLocation location;
 	StringSlice identifier;
 	u32 attachedShaderCount;
-	RawAttachedShader *attachedShaders;
-	RawProgram *next;
+	AttachedShaderToken *attachedShaders;
+	ProgramToken *next;
 };
 
 struct ProjectParser
@@ -85,10 +85,10 @@ struct ProjectParser
 	char *lineBegin;
 
 	u32 shaderCount;
-	RawShader *shaders;
+	ShaderToken *shaders;
 
 	u32 programCount;
-	RawProgram *programs;
+	ProgramToken *programs;
 
 	ParseProjectError *errors;
 };

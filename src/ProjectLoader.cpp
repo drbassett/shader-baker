@@ -206,7 +206,7 @@ static bool parseShader(MemStack& mem, ProjectParser& parser, ShaderType shaderT
 		return false;
 	}
 	
-	auto shader = memStackPushType(mem, RawShader);
+	auto shader = memStackPushType(mem, ShaderToken);
 	shader->location = shaderToken.location;
 	shader->identifier = shaderToken.str;
 	shader->type = shaderType;
@@ -218,11 +218,11 @@ static bool parseShader(MemStack& mem, ProjectParser& parser, ShaderType shaderT
 }
 
 inline static void attachShaderToProgram(
-	MemStack& mem, ProjectParser& parser, RawProgram& program, TextLocation identifierLocation)
+	MemStack& mem, ProjectParser& parser, ProgramToken& program, TextLocation identifierLocation)
 {
 	assert(identifierLocation.srcPtr != parser.cursor);
 
-	auto shader = memStackPushType(mem, RawAttachedShader);
+	auto shader = memStackPushType(mem, AttachedShaderToken);
 	shader->location = identifierLocation;
 	shader->identifier.begin = identifierLocation.srcPtr;
 	shader->identifier.end = parser.cursor;
@@ -234,11 +234,11 @@ static bool parseProgram(MemStack& mem, ProjectParser& parser)
 	skipWhitespace(parser);
 	auto programLocation = parserTextLocation(parser);
 
-	auto program = memStackPushType(mem, RawProgram);
+	auto program = memStackPushType(mem, ProgramToken);
 	program->location = programLocation;
 	program->identifier = {};
 	program->attachedShaderCount = 0;
-	program->attachedShaders = (RawAttachedShader*) mem.top;
+	program->attachedShaders = (AttachedShaderToken*) mem.top;
 	program->next = parser.programs;
 	parser.programs = program;
 	++parser.programCount;
