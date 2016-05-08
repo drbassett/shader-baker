@@ -1,0 +1,47 @@
+Version 1.0
+
+VertexShader vs HERE HERE
+VertexShader vs --- ---
+VertexShader vs
+---
+---
+
+VertexShader vertShader
+---
+#version 330
+
+void main() { }
+---
+
+FragmentShader fragShader
+---
+#version 330
+
+
+void main() { }
+---
+
+Program prog{}
+Program prog {}
+Program prog{ }
+Program prog { }
+Program prog{vertShader}
+Program prog{ vertShader }
+Program prog { vertShader }
+Program prog{vertShader geomShader fragShader}
+Program prog{ vertShader geomShader fragShader }
+Program prog { vertShader geomShader fragShader }
+
+Program prog {
+	vertShader
+	geomShader
+	fragShader
+}
+
+Program prog
+{
+	vertShader
+	geomShader
+	fragShader
+}
+

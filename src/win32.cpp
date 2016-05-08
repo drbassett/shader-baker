@@ -5,6 +5,7 @@
 #pragma warning(pop)
 
 #include "ShaderBaker.cpp"
+#include "ProjectLoader.cpp"
 #include "../include/wglext.h"
 #include <cstdio>
 
@@ -326,19 +327,6 @@ void toHexString(u64 value, char *str)
 	*str = '\0';
 }
 
-static bool isWhitespace(char c)
-{
-	switch (c)
-	{
-	case ' ':
-	case '\t':
-	case '\n':
-	case '\r':
-		return true;
-	}
-	return false;
-}
-
 static char* skipWhitespace(char *ptr)
 {
 	for (;;)
@@ -370,6 +358,63 @@ static char* readArg(char *ptr, StringSlice& result)
 	return ptr;
 }
 
+int main(char argc, char **argv)
+{
+	MemStack scratchMem = {};
+	memStackInit(scratchMem, 1024 * 1024);
+
+	auto projectFileName = stringSliceFromCString("../../project.sb");
+	FilePath projectFilePath{projectFileName};
+
+	FILETIME lastWriteTime = {};
+	for (;;)
+	{
+		auto memMarker = memStackMark(scratchMem);
+
+		Sleep(250);
+
+		FILETIME writeTime = {};
+		if (!getFileWriteTime(scratchMem, projectFilePath, writeTime))
+		{
+			writeTime = {};
+		}
+		if (!fileTimesEqual(writeTime, lastWriteTime))
+		{
+			ReadFileError readError;
+			u8 *fileContents;
+			size_t fileSize;
+			PLATFORM_readWholeFile(scratchMem, projectFilePath, readError, fileContents, fileSize);
+			if (fileContents != nullptr)
+			{
+				if (*fileContents == '!')
+				{
+					return 0;
+				}
+
+				lastWriteTime = writeTime;
+
+				StringSlice projectText{(char*) fileContents, (char*) fileContents + fileSize}; 
+				ParseProjectError* parseErrors;
+				auto project = parseProject(scratchMem, projectText, parseErrors);
+
+				printf("--------------------\n");
+				if (parseErrors == nullptr)
+				{
+					printf("Parse succeeded:\n");
+					DEBUG_printProject(project);
+				} else
+				{
+					printf("Errors:\n");
+					DEBUG_printErrors(parseErrors);
+				}
+			}
+		}
+
+		memStackPop(scratchMem, memMarker);
+	}
+}
+
+#if 0
 int CALLBACK WinMain(
 	HINSTANCE hInstance,
 	HINSTANCE hPrevInstance,
@@ -496,6 +541,7 @@ exit:
 	destroyApplication(appState);
 	return 0;
 }
+#endif
 
 LRESULT CALLBACK windowProc(
 	HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)

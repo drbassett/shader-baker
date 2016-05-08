@@ -569,6 +569,11 @@ static bool operator==(StringSlice lhs, const char* rhs)
 	}
 }
 
+static bool operator!=(StringSlice lhs, const char* rhs)
+{
+	return !(lhs == rhs);
+}
+
 static void drawText(
 	TextRenderConfig const& textRenderConfig,
 	AsciiFont& font,

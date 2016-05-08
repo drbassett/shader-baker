@@ -29,7 +29,7 @@ set projectName=shader-baker
 set debugOptions=/MTd /Ob0 /Od /Zi
 set releaseOptions=/MT /O2 /Oi
 
-set ignoredWarnings=/wd4100 /wd4996
+set ignoredWarnings=/wd4100 /wd4996 /wd4505
 
 set libraries=Gdi32.lib opengl32.lib User32.lib
 
