@@ -16,6 +16,7 @@ inline static void addError(
 	error->location = location;
 	error->next = parser.errors;
 	parser.errors = error;
+	++parser.errorCount;
 }
 
 inline static void addError(MemStack& mem, ProjectParser& parser, ProjectErrorType errorType)
@@ -111,6 +112,37 @@ static bool parseU32Base10(StringSlice str, u32& result)
 		++p;
 	}
 	return str.end != str.begin;
+}
+
+static void u32ToString(MemStack& mem, u32 value, char*& result, u32& length)
+{
+	// 10 characters is large enough to hold any 32 bit integer
+	result = memStackPushArray(mem, char, 10);
+	auto resultEnd = result;
+	// This loop always has to execute at least once.
+	// Otherwise, nothing gets printed for zero.
+	do
+	{
+		*resultEnd = (value % 10) + '0';
+		value /= 10;
+		++resultEnd;
+	} while (value > 0);
+	length = (u32) (resultEnd - result);
+
+	// reverse the string
+	u32 lo = 0;
+	u32 hi = length - 1;
+	while (lo < hi)
+	{
+		char tmp = result[lo];
+		result[lo] = result[hi];
+		result[hi] = tmp;
+		++lo;
+		--hi;
+	}
+
+	// "deallocate" the extra space
+	mem.top = (u8*) resultEnd;
 }
 
 static bool readHereString(MemStack& mem, ProjectParser& parser, StringSlice& result)
@@ -316,7 +348,7 @@ static bool parseProgram(MemStack& mem, ProjectParser& parser)
 	}
 }
 
-Project parseProject(MemStack& permMem, MemStack& scratchMem, StringSlice projectText, ParseProjectError*& parseErrors)
+Project parseProject(MemStack& permMem, MemStack& scratchMem, StringSlice projectText, ProjectErrors& errors)
 {
 	ProjectParser parser = {};
 	parser.cursor = projectText.begin;
@@ -485,6 +517,8 @@ Project parseProject(MemStack& permMem, MemStack& scratchMem, StringSlice projec
 // never get large enough to justify this complexity, but if the loading process
 // gets sluggish, this is something to consider.
 
+	auto projectMemMarker = memStackMark(permMem);
+
 	project.shaders = memStackPushArray(permMem, Shader, parser.shaderCount);
 	project.shaderCount = parser.shaderCount;
 	{
@@ -571,13 +605,119 @@ Project parseProject(MemStack& permMem, MemStack& scratchMem, StringSlice projec
 		}
 	}
 
-	if (parser.errors != nullptr)
+
+	if (parser.errorCount == 0)
 	{
-		project = {};
+		errors = {};
+		return project;
 	}
 
+	memStackPop(permMem, projectMemMarker);
+	project = {};
+	
 returnResult:
-	parseErrors = parser.errors;
+	// Scan through the project text to find line boundaries. This could have
+	// been done while the project text was parsed, but most of the time
+	// projects will not have any errors, so this code will never get executed
+	// anyways. Doing it while parsing adds extra complexity and will usually
+	// be a waste of time.
+	u32 lineCount = 0;
+	char extraLineCharacter;
+	auto lines = (StringSlice*) scratchMem.top;
+	{
+		auto lineBegin = projectText.begin;
+		auto cursor = projectText.begin;
+		while (cursor != projectText.end)
+		{
+			switch (*cursor)
+			{
+			case '\n':
+				extraLineCharacter = '\r';
+				break;
+			case '\r':
+				extraLineCharacter = '\n';
+				break;
+			default:
+				++cursor;
+				continue;
+			}
+
+			auto lineBounds = memStackPushType(scratchMem, StringSlice);
+			lineBounds->begin = lineBegin;
+			lineBounds->end = cursor;
+			++lineCount;
+			++cursor;
+			if (cursor == projectText.end)
+			{
+				break;
+			}
+			if (*cursor == extraLineCharacter)
+			{
+				++cursor;
+			}
+			lineBegin = cursor;
+		}
+	}
+
+	errors.count = parser.errorCount;
+	errors.ptr = memStackPushArray(permMem, ProjectError, parser.errorCount);
+	{
+		auto pError = parser.errors;
+		auto errorIdx = parser.errorCount - 1; 
+		while (pError != nullptr)
+		{
+			auto errorLineNumber = pError->location.lineNumber;
+			u32 contextLineCount = 2;
+
+			u32 firstContextLineIdx;
+			firstContextLineIdx = errorLineNumber;
+			if (errorLineNumber > contextLineCount)
+			{
+				firstContextLineIdx = errorLineNumber - contextLineCount;
+			}
+			--firstContextLineIdx;
+
+			u32 lastContextLineIdx = errorLineNumber + contextLineCount;
+			if (lastContextLineIdx > lineCount)
+			{
+				lastContextLineIdx = lineCount;
+			}
+
+			auto pContextString = memStackPushType(permMem, size_t);
+			auto contextStringBegin = (u8*) permMem.top;
+			for (u32 i = firstContextLineIdx; i < lastContextLineIdx; ++i)
+			{
+				auto lineBounds = lines[i];
+				auto lineLength = stringSliceLength(lineBounds);
+
+				// add the line number
+				{
+					char *unused1;
+					u32 unused2;
+					u32ToString(permMem, i + 1, unused1, unused2);
+				}
+
+				auto lineText = memStackPushArray(permMem, char, lineLength + 4);
+				lineText[0] = ' ';
+				lineText[1] = '|';
+				lineText[2] = ' ';
+				memcpy(lineText + 3, lineBounds.begin, lineLength);
+				lineText[lineLength + 4 - 1] = '\n';
+			}
+			auto contextStringEnd = (u8*) permMem.top;
+			auto contextStringLength = contextStringEnd - contextStringBegin;
+			(*pContextString) = contextStringLength;
+
+			errors.ptr[errorIdx].type = pError->type;
+			errors.ptr[errorIdx].lineNumber = pError->location.lineNumber;
+			errors.ptr[errorIdx].charNumber = pError->location.charNumber;
+			errors.ptr[errorIdx].context.ptr = pContextString;
+
+			pError = pError->next;
+			--errorIdx;
+		}
+	}
+
 	return project;
 }
 

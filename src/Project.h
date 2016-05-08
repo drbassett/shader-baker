@@ -90,6 +90,7 @@ struct ProjectParser
 	u32 programCount;
 	ProgramToken *programs;
 
+	u32 errorCount;
 	ParseProjectError *errors;
 };
 
@@ -120,7 +121,34 @@ struct Project
 	Shader *shaders;
 };
 
-Project parseProject(MemStack& permMem, MemStack& scratchMem, StringSlice projectText, ParseProjectError*& parseErrors);
+struct ProjectError
+{
+	ProjectErrorType type;
+	u32 lineNumber, charNumber;
+	PackedString context;
+};
+
+struct ProjectErrors
+{
+	u32 count;
+	ProjectError *ptr;
+};
+
+Project parseProject(MemStack& permMem, MemStack& scratchMem, StringSlice projectText, ProjectErrors*& errors);
+
+inline void DEBUG_printString(StringSlice str)
+{
+	while (str.begin != str.end)
+	{
+		putchar(*str.begin);
+		++str.begin;
+	}
+}
+
+inline void DEBUG_printString(PackedString str)
+{
+	DEBUG_printString(unpackString(str));
+}
 
 char* DEBUG_errorTypeToString(ProjectErrorType errorType)
 {
@@ -164,19 +192,18 @@ char* DEBUG_errorTypeToString(ProjectErrorType errorType)
 	}
 }
 
-void DEBUG_printErrors(ParseProjectError* errors)
+void DEBUG_printErrors(ProjectErrors const& errors)
 {
-	u32 errorNumber = 1;
-	while (errors != nullptr)
+	for (u32 i = 0; i < errors.count; ++i)
 	{
+		auto error = errors.ptr[i];
 		printf(
-			"%d. line %d, char %d: %s\n",
-			errorNumber,
-			errors->location.lineNumber,
-			errors->location.charNumber,
-			DEBUG_errorTypeToString(errors->type));
-		errors = errors->next;
-		++errorNumber;
+			"Line %d, char %d: %s\n>>>>>\n",
+			error.lineNumber,
+			error.charNumber,
+			DEBUG_errorTypeToString(error.type));
+		DEBUG_printString(error.context);
+		printf(">>>>>\n\n");
 	}
 }
 
@@ -200,20 +227,6 @@ char* DEBUG_shaderTypeToString(ShaderType type)
 		unreachable();
 		return "";
 	}
-}
-
-inline void DEBUG_printString(StringSlice str)
-{
-	while (str.begin != str.end)
-	{
-		putchar(*str.begin);
-		++str.begin;
-	}
-}
-
-inline void DEBUG_printString(PackedString str)
-{
-	DEBUG_printString(unpackString(str));
 }
 
 void DEBUG_printProject(Project& project)

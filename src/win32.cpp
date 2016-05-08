@@ -399,18 +399,18 @@ int main(char argc, char **argv)
 				StringSlice projectText{(char*) fileContents, (char*) fileContents + fileSize}; 
 
 				auto permMemMarker = memStackMark(permMem);
-				ParseProjectError* parseErrors;
-				auto project = parseProject(scratchMem, permMem, projectText, parseErrors);
+				ProjectErrors projectErrors;
+				auto project = parseProject(scratchMem, permMem, projectText, projectErrors);
 
-				printf("--------------------\n");
-				if (parseErrors == nullptr)
+				system("cls");
+				if (projectErrors.count == 0)
 				{
 					printf("Parse succeeded:\n");
 					DEBUG_printProject(project);
 				} else
 				{
 					printf("Errors:\n");
-					DEBUG_printErrors(parseErrors);
+					DEBUG_printErrors(projectErrors);
 				}
 
 				memStackPop(permMem, permMemMarker);
