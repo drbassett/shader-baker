@@ -9,7 +9,7 @@ inline static TextLocation parserTextLocation(ProjectParser& parser)
 }
 
 inline static void addError(
-	MemStack& mem, ProjectParser& parser, TextLocation location, ParseProjectErrorType errorType)
+	MemStack& mem, ProjectParser& parser, TextLocation location, ProjectErrorType errorType)
 {
 	auto error = memStackPushType(mem, ParseProjectError);
 	error->type = errorType;
@@ -18,7 +18,7 @@ inline static void addError(
 	parser.errors = error;
 }
 
-inline static void addError(MemStack& mem, ProjectParser& parser, ParseProjectErrorType errorType)
+inline static void addError(MemStack& mem, ProjectParser& parser, ProjectErrorType errorType)
 {
 	addError(mem, parser, parserTextLocation(parser), errorType);
 } 
@@ -118,7 +118,7 @@ static bool readHereString(MemStack& mem, ProjectParser& parser, StringSlice& re
 	auto hereStringLocation = parserTextLocation(parser);
 	if (parser.cursor == parser.end)
 	{
-		addError(mem, parser, hereStringLocation, ParseProjectErrorType::MissingHereStringMarker);
+		addError(mem, parser, hereStringLocation, ProjectErrorType::MissingHereStringMarker);
 		return false;
 	}
 
@@ -126,13 +126,13 @@ static bool readHereString(MemStack& mem, ProjectParser& parser, StringSlice& re
 	{
 		if (parser.cursor == parser.end)
 		{
-			addError(mem, parser, hereStringLocation, ParseProjectErrorType::UnclosedHereStringMarker);
+			addError(mem, parser, hereStringLocation, ProjectErrorType::UnclosedHereStringMarker);
 			return false;
 		}
 
 		if (isWhitespace(*parser.cursor))
 		{
-			addError(mem, parser, hereStringLocation, ParseProjectErrorType::HereStringMarkerWhitespace);
+			addError(mem, parser, hereStringLocation, ProjectErrorType::HereStringMarkerWhitespace);
 			return false;
 		}
 
@@ -147,7 +147,7 @@ static bool readHereString(MemStack& mem, ProjectParser& parser, StringSlice& re
 	auto markerLength = stringSliceLength(hereStringMarker);
 	if (markerLength == 0)
 	{
-		addError(mem, parser, hereStringLocation, ParseProjectErrorType::EmptyHereStringMarker);
+		addError(mem, parser, hereStringLocation, ProjectErrorType::EmptyHereStringMarker);
 		return false;
 	}
 	++parser.cursor;
@@ -182,7 +182,7 @@ static bool readHereString(MemStack& mem, ProjectParser& parser, StringSlice& re
 
 		if (parser.cursor == parser.end)
 		{
-			addError(mem, parser, hereStringLocation, ParseProjectErrorType::UnclosedHereString);
+			addError(mem, parser, hereStringLocation, ProjectErrorType::UnclosedHereString);
 			return false;
 		}
 
@@ -195,7 +195,7 @@ static bool parseShader(MemStack& mem, ProjectParser& parser, ShaderType shaderT
 	auto shaderToken = readToken(parser);
 	if (stringSliceLength(shaderToken.str) == 0)
 	{
-		addError(mem, parser, shaderToken.location, ParseProjectErrorType::ShaderMissingIdentifier);
+		addError(mem, parser, shaderToken.location, ProjectErrorType::ShaderMissingIdentifier);
 		return false;
 	}
 	skipWhitespace(parser);
@@ -248,7 +248,7 @@ static bool parseProgram(MemStack& mem, ProjectParser& parser)
 	{
 		if (parser.cursor == parser.end)
 		{
-			addError(mem, parser, programLocation, ParseProjectErrorType::ProgramMissingShaderList);
+			addError(mem, parser, programLocation, ProjectErrorType::ProgramMissingShaderList);
 			return false;
 		}
 
@@ -264,7 +264,7 @@ static bool parseProgram(MemStack& mem, ProjectParser& parser)
 			skipWhitespace(parser);
 			if (parser.cursor == parser.end || *parser.cursor != '{')
 			{
-				addError(mem, parser, programLocation, ParseProjectErrorType::ProgramMissingShaderList);
+				addError(mem, parser, programLocation, ProjectErrorType::ProgramMissingShaderList);
 				return false;
 			}
 			break;
@@ -287,7 +287,7 @@ static bool parseProgram(MemStack& mem, ProjectParser& parser)
 		{
 			if (parser.cursor == parser.end)
 			{
-				addError(mem, parser, programLocation, ParseProjectErrorType::ProgramUnclosedShaderList);
+				addError(mem, parser, programLocation, ProjectErrorType::ProgramUnclosedShaderList);
 				return false;
 			}
 
@@ -331,7 +331,7 @@ Project parseProject(MemStack& permMem, MemStack& scratchMem, StringSlice projec
 		auto versionToken = readToken(parser);
 		if (versionToken.str != "Version")
 		{
-			addError(scratchMem, parser, versionToken.location, ParseProjectErrorType::MissingVersionStatement);
+			addError(scratchMem, parser, versionToken.location, ProjectErrorType::MissingVersionStatement);
 			goto returnResult;
 		}
 	}
@@ -343,7 +343,7 @@ Project parseProject(MemStack& permMem, MemStack& scratchMem, StringSlice projec
 		{
 			if (pDot == versionNumberToken.str.end)
 			{
-				addError(scratchMem, parser, tokenLocation, ParseProjectErrorType::VersionInvalidFormat);
+				addError(scratchMem, parser, tokenLocation, ProjectErrorType::VersionInvalidFormat);
 				goto returnResult;
 			}
 			
@@ -359,12 +359,12 @@ Project parseProject(MemStack& permMem, MemStack& scratchMem, StringSlice projec
 
 		if (pFirstDot == versionNumberToken.str.begin)
 		{
-			addError(scratchMem, parser, tokenLocation, ParseProjectErrorType::VersionInvalidFormat);
+			addError(scratchMem, parser, tokenLocation, ProjectErrorType::VersionInvalidFormat);
 			goto returnResult;
 		}
 		if (pFirstDot + 1 == versionNumberToken.str.end)
 		{
-			addError(scratchMem, parser, tokenLocation, ParseProjectErrorType::VersionInvalidFormat);
+			addError(scratchMem, parser, tokenLocation, ProjectErrorType::VersionInvalidFormat);
 			goto returnResult;
 		}
 
@@ -378,7 +378,7 @@ Project parseProject(MemStack& permMem, MemStack& scratchMem, StringSlice projec
 			
 			if (*pDot == '.')
 			{
-				addError(scratchMem, parser, tokenLocation, ParseProjectErrorType::VersionInvalidFormat);
+				addError(scratchMem, parser, tokenLocation, ProjectErrorType::VersionInvalidFormat);
 				goto returnResult;
 			}
 			
@@ -389,13 +389,13 @@ Project parseProject(MemStack& permMem, MemStack& scratchMem, StringSlice projec
 		auto majorStr = StringSlice{versionNumberToken.str.begin, pFirstDot};
 		if (!parseU32Base10(majorStr, version.major))
 		{
-			addError(scratchMem, parser, tokenLocation, ParseProjectErrorType::VersionInvalidFormat);
+			addError(scratchMem, parser, tokenLocation, ProjectErrorType::VersionInvalidFormat);
 			success = false;
 		}
 		auto minorStr = StringSlice{pFirstDot + 1, versionNumberToken.str.end};
 		if (!parseU32Base10(minorStr, version.minor))
 		{
-			addError(scratchMem, parser, tokenLocation, ParseProjectErrorType::VersionInvalidFormat);
+			addError(scratchMem, parser, tokenLocation, ProjectErrorType::VersionInvalidFormat);
 			success = false;
 		}
 		if (!success)
@@ -405,7 +405,7 @@ Project parseProject(MemStack& permMem, MemStack& scratchMem, StringSlice projec
 
 		if (!(version.major == 1 && version.minor == 0))
 		{
-			addError(scratchMem, parser, tokenLocation, ParseProjectErrorType::UnsupportedVersion);
+			addError(scratchMem, parser, tokenLocation, ProjectErrorType::UnsupportedVersion);
 			goto returnResult;
 		}
 	}
@@ -471,7 +471,7 @@ Project parseProject(MemStack& permMem, MemStack& scratchMem, StringSlice projec
 			}
 		} else
 		{
-			addError(scratchMem, parser, valueLocation, ParseProjectErrorType::UnknownValueType);
+			addError(scratchMem, parser, valueLocation, ProjectErrorType::UnknownValueType);
 			goto returnResult;
 		}
 	}
@@ -501,7 +501,7 @@ Project parseProject(MemStack& permMem, MemStack& scratchMem, StringSlice projec
 			{
 				if (unpackString(project.shaders[i].name) == pShader->identifier)
 				{
-					addError(scratchMem, parser, pShader->location, ParseProjectErrorType::DuplicateShaderName);
+					addError(scratchMem, parser, pShader->location, ProjectErrorType::DuplicateShaderName);
 					break;
 				}
 			}
@@ -525,7 +525,7 @@ Project parseProject(MemStack& permMem, MemStack& scratchMem, StringSlice projec
 					scratchMem,
 					parser,
 					pProgram->location,
-					ParseProjectErrorType::ProgramExceedsAttachedShaderLimit);
+					ProjectErrorType::ProgramExceedsAttachedShaderLimit);
 				project.programs[programIdx].attachedShaderCount = 0;
 				project.programs[programIdx].attachedShaders = nullptr;
 				continue;
@@ -536,7 +536,7 @@ Project parseProject(MemStack& permMem, MemStack& scratchMem, StringSlice projec
 			{
 				if (unpackString(project.programs[i].name) == pProgram->identifier)
 				{
-					addError(scratchMem, parser, pProgram->location, ParseProjectErrorType::DuplicateProgramName);
+					addError(scratchMem, parser, pProgram->location, ProjectErrorType::DuplicateProgramName);
 					break;
 				}
 			}
@@ -562,7 +562,7 @@ Project parseProject(MemStack& permMem, MemStack& scratchMem, StringSlice projec
 					scratchMem,
 					parser,
 					shader.location,
-					ParseProjectErrorType::ProgramUnresolvedShaderIdent);
+					ProjectErrorType::ProgramUnresolvedShaderIdent);
 				LBL_nextShader:;
 			}
 

@@ -1,6 +1,6 @@
 #pragma once
 
-enum struct ParseProjectErrorType
+enum struct ProjectErrorType
 {
 	MissingVersionStatement,
 	VersionInvalidFormat,
@@ -34,7 +34,7 @@ struct Token
 
 struct ParseProjectError
 {
-	ParseProjectErrorType type;
+	ProjectErrorType type;
 	TextLocation location;
 	ParseProjectError *next;
 };
@@ -122,41 +122,41 @@ struct Project
 
 Project parseProject(MemStack& permMem, MemStack& scratchMem, StringSlice projectText, ParseProjectError*& parseErrors);
 
-char* DEBUG_errorTypeToString(ParseProjectErrorType errorType)
+char* DEBUG_errorTypeToString(ProjectErrorType errorType)
 {
 	switch (errorType)
 	{
-	case ParseProjectErrorType::MissingVersionStatement:
+	case ProjectErrorType::MissingVersionStatement:
 		return "First statement in document should be a 'Version' statement";
-	case ParseProjectErrorType::VersionInvalidFormat:
+	case ProjectErrorType::VersionInvalidFormat:
 		return "Version number is not correctly formatted. It should have the syntax \"Major.Minor\", where \"Major\" and \"Minor\" are numbers";
-	case ParseProjectErrorType::UnsupportedVersion:
+	case ProjectErrorType::UnsupportedVersion:
 		return "Unsupported version - this parser only supports version 1.0";
-	case ParseProjectErrorType::UnknownValueType:
+	case ProjectErrorType::UnknownValueType:
 		return "Unknown type for value";
-	case ParseProjectErrorType::MissingHereStringMarker:
+	case ProjectErrorType::MissingHereStringMarker:
 		return "Expected marker token for here string";
-	case ParseProjectErrorType::UnclosedHereStringMarker:
+	case ProjectErrorType::UnclosedHereStringMarker:
 		return "Unclosed here string marker. Markers must be closed with a ':'";
-	case ParseProjectErrorType::HereStringMarkerWhitespace:
+	case ProjectErrorType::HereStringMarkerWhitespace:
 		return "Here string markers contains whitespace";
-	case ParseProjectErrorType::EmptyHereStringMarker:
+	case ProjectErrorType::EmptyHereStringMarker:
 		return "Here string marker is empty";
-	case ParseProjectErrorType::UnclosedHereString:
+	case ProjectErrorType::UnclosedHereString:
 		return "Here string not closed. Make sure its marker ends with a ':'";
-	case ParseProjectErrorType::ShaderMissingIdentifier:
+	case ProjectErrorType::ShaderMissingIdentifier:
 		return "Expected name for shader";
-	case ParseProjectErrorType::ProgramMissingShaderList:
+	case ProjectErrorType::ProgramMissingShaderList:
 		return "Expected a shader list to follow the program name";
-	case ParseProjectErrorType::ProgramUnclosedShaderList:
+	case ProjectErrorType::ProgramUnclosedShaderList:
 		return "Unclosed attached shader list";
-	case ParseProjectErrorType::DuplicateShaderName:
+	case ProjectErrorType::DuplicateShaderName:
 		return "Another shader in this project has the same name";
-	case ParseProjectErrorType::DuplicateProgramName:
+	case ProjectErrorType::DuplicateProgramName:
 		return "Another program in this project has the same name";
-	case ParseProjectErrorType::ProgramExceedsAttachedShaderLimit:
+	case ProjectErrorType::ProgramExceedsAttachedShaderLimit:
 		return "Programs cannot have more than 255 shaders attached";
-	case ParseProjectErrorType::ProgramUnresolvedShaderIdent:
+	case ProjectErrorType::ProgramUnresolvedShaderIdent:
 		return "No shader with this name exists in this project";
 	default:
 		unreachable();
