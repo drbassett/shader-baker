@@ -1,4 +1,4 @@
-#include "ProjectLoader.h"
+#include "Project.h"
 
 //TODO consider restricting the available characters for identifiers
 

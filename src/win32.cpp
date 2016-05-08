@@ -5,7 +5,7 @@
 #pragma warning(pop)
 
 #include "ShaderBaker.cpp"
-#include "ProjectLoader.cpp"
+#include "Project.cpp"
 #include "../include/wglext.h"
 #include <cstdio>
 
