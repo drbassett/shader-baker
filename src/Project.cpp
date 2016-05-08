@@ -485,20 +485,21 @@ Project parseProject(MemStack& permMem, MemStack& scratchMem, StringSlice projec
 // never get large enough to justify this complexity, but if the loading process
 // gets sluggish, this is something to consider.
 
-	auto shaders = memStackPushArray(permMem, Shader, parser.shaderCount);
+	project.shaders = memStackPushArray(permMem, Shader, parser.shaderCount);
+	project.shaderCount = parser.shaderCount;
 	{
 		auto pShader = parser.shaders;
 		auto shaderIdx = parser.shaderCount - 1;
 		while (pShader != nullptr)
 		{
-			shaders[shaderIdx].type = pShader->type;
-			shaders[shaderIdx].name = packString(permMem, pShader->identifier);
-			shaders[shaderIdx].source = packString(permMem, pShader->source);
+			project.shaders[shaderIdx].type = pShader->type;
+			project.shaders[shaderIdx].name = packString(permMem, pShader->identifier);
+			project.shaders[shaderIdx].source = packString(permMem, pShader->source);
 
 			// check the shader name for uniqueness
 			for (auto i = shaderIdx + 1; i < project.shaderCount; ++i)
 			{
-				if (unpackString(shaders[i].name) == pShader->identifier)
+				if (unpackString(project.shaders[i].name) == pShader->identifier)
 				{
 					addError(scratchMem, parser, pShader->location, ParseProjectErrorType::DuplicateShaderName);
 					break;
@@ -509,16 +510,15 @@ Project parseProject(MemStack& permMem, MemStack& scratchMem, StringSlice projec
 			--shaderIdx;
 		}
 	}
-	project.shaderCount = parser.shaderCount;
-	project.shaders = shaders;
 
-	auto programs = memStackPushArray(permMem, Program, parser.programCount);
+	project.programCount = parser.programCount;
+	project.programs = memStackPushArray(permMem, Program, parser.programCount);
 	{
 		auto pProgram = parser.programs;
 		auto programIdx = parser.programCount - 1;
 		while (pProgram != nullptr)
 		{
-			programs[programIdx].name = packString(permMem, pProgram->identifier);
+			project.programs[programIdx].name = packString(permMem, pProgram->identifier);
 			if (pProgram->attachedShaderCount > 255)
 			{
 				addError(
@@ -526,15 +526,15 @@ Project parseProject(MemStack& permMem, MemStack& scratchMem, StringSlice projec
 					parser,
 					pProgram->location,
 					ParseProjectErrorType::ProgramExceedsAttachedShaderLimit);
-				programs->attachedShaderCount = 0;
-				programs->attachedShaders = nullptr;
+				project.programs[programIdx].attachedShaderCount = 0;
+				project.programs[programIdx].attachedShaders = nullptr;
 				continue;
 			}
 			
 			// check the program name for uniqueness
 			for (auto i = programIdx + 1; i < project.programCount; ++i)
 			{
-				if (unpackString(programs[i].name) == pProgram->identifier)
+				if (unpackString(project.programs[i].name) == pProgram->identifier)
 				{
 					addError(scratchMem, parser, pProgram->location, ParseProjectErrorType::DuplicateProgramName);
 					break;
@@ -542,8 +542,8 @@ Project parseProject(MemStack& permMem, MemStack& scratchMem, StringSlice projec
 			}
 
 			auto shaderListLength = pProgram->attachedShaderCount;
-			programs[programIdx].attachedShaderCount = (u8) shaderListLength;
-			programs[programIdx].attachedShaders = memStackPushArray(permMem, Shader*, shaderListLength);
+			project.programs[programIdx].attachedShaderCount = (u8) shaderListLength;
+			project.programs[programIdx].attachedShaders = memStackPushArray(permMem, Shader*, shaderListLength);
 
 			// lookup pointers to attached shaders
 			for (u32 shaderIdx = 0; shaderIdx < shaderListLength; ++shaderIdx)
@@ -553,11 +553,11 @@ Project parseProject(MemStack& permMem, MemStack& scratchMem, StringSlice projec
 				{
 					if (unpackString(project.shaders[i].name) == shader.identifier)
 					{
-						programs[programIdx].attachedShaders[shaderIdx] = project.shaders + i;
+						project.programs[programIdx].attachedShaders[shaderIdx] = project.shaders + i;
 						goto LBL_nextShader;
 					}
 				}
-				programs[programIdx].attachedShaders[shaderIdx] = nullptr;
+				project.programs[programIdx].attachedShaders[shaderIdx] = nullptr;
 				addError(
 					scratchMem,
 					parser,
@@ -570,8 +570,6 @@ Project parseProject(MemStack& permMem, MemStack& scratchMem, StringSlice projec
 			--programIdx;
 		}
 	}
-	project.programCount = parser.programCount;
-	project.programs = programs;
 
 	if (parser.errors != nullptr)
 	{
