@@ -139,19 +139,44 @@ static bool parseU32Base10(StringSlice str, u32& result)
 
 static bool readHereString(MemStack& mem, ProjectParser& parser, StringSlice& result)
 {
-//TODO this here string implementation does not permit an empty string. Require
-// that the here string marker end in a certain character to allow this.
 	auto hereStringLocation = parserTextLocation(parser);
-	auto hereStringMarker = readToken(parser);
-	auto markerLength = stringSliceLength(hereStringMarker);
-	if (markerLength == 0)
+	if (parser.cursor == parser.end)
 	{
 		addError(mem, parser, hereStringLocation, ParseProjectErrorType::MissingHereStringMarker);
 		return false;
 	}
 
-	auto strBegin = parser.cursor;
+	for (;;)
+	{
+		if (parser.cursor == parser.end)
+		{
+			addError(mem, parser, hereStringLocation, ParseProjectErrorType::UnclosedHereStringMarker);
+			return false;
+		}
 
+		if (isWhitespace(*parser.cursor))
+		{
+			addError(mem, parser, hereStringLocation, ParseProjectErrorType::HereStringMarkerWhitespace);
+			return false;
+		}
+
+		if (*parser.cursor == ':')
+		{
+			break;
+		}
+
+		++parser.cursor;
+	}
+	auto hereStringMarker = StringSlice{hereStringLocation.srcPtr, parser.cursor};
+	auto markerLength = stringSliceLength(hereStringMarker);
+	if (markerLength == 0)
+	{
+		addError(mem, parser, hereStringLocation, ParseProjectErrorType::EmptyHereStringMarker);
+		return false;
+	}
+	++parser.cursor;
+
+	auto strBegin = parser.cursor;
 	for (;;)
 	{
 		// if enough characters are available, check if the here string marker has been encounted
@@ -198,6 +223,7 @@ static bool parseShader(MemStack& mem, ProjectParser& parser, ShaderType shaderT
 		addError(mem, parser, shaderLocation, ParseProjectErrorType::ShaderMissingIdentifier);
 		return false;
 	}
+	skipWhitespace(parser);
 
 	StringSlice shaderSource = {};
 	if (!readHereString(mem, parser, shaderSource))
@@ -447,7 +473,7 @@ Project parseProject(MemStack& mem, StringSlice projectText, ParseProjectError*&
 	}
 
 	// Copy the shaders and programs to permanent storage. Copying is done
-	// in reverse order so that things are in the same order as in the file.
+	// in reverse order so that arrays are in the same order as in the file.
 
 	auto shaders = memStackPushArray(mem, RawShader, parser.shaderCount);
 	if (parser.shaderCount > 0)

@@ -12,8 +12,11 @@ enum struct ParseProjectErrorType
 	UnsupportedVersion,
 	UnknownValueType,
 	ShaderMissingIdentifier,
-	MissingHereStringMarker,
 	UnclosedHereString,
+	MissingHereStringMarker,
+	UnclosedHereStringMarker,
+	HereStringMarkerWhitespace,
+	EmptyHereStringMarker,
 	ProgramUnclosedShaderList,
 	ProgramMissingShaderList,
 	IncompleteProgramStatement,
@@ -127,8 +130,14 @@ char* DEBUG_errorTypeToString(ParseProjectErrorType errorType)
 		return "Unknown type for value";
 	case ParseProjectErrorType::MissingHereStringMarker:
 		return "Expected marker token for here string";
+	case ParseProjectErrorType::UnclosedHereStringMarker:
+		return "Unclosed here string marker. Markers must be closed with a ':'";
+	case ParseProjectErrorType::HereStringMarkerWhitespace:
+		return "Here string markers cannot contain whitespace";
+	case ParseProjectErrorType::EmptyHereStringMarker:
+		return "Here string marker is empty";
 	case ParseProjectErrorType::UnclosedHereString:
-		return "Here string not closed";
+		return "Here string not closed. Make sure the marker for it ends with a ':'";
 	case ParseProjectErrorType::ShaderMissingIdentifier:
 		return "Expected name for shader";
 	case ParseProjectErrorType::ProgramMissingShaderList:
