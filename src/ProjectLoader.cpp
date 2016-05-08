@@ -1,13 +1,7 @@
 #include "ProjectLoader.h"
 
-//TODO add a sync character to the beginning of each line.
-// We can let the user choose the sync character by letting them specify it at
-// the beginning of the version statement.
-
 //TODO consider restricting the available characters for identifiers
 
-//TODO consider removing this function - it is very easy to end up with
-// the wrong line/char number when using it
 inline static TextLocation parserTextLocation(ProjectParser& parser, char *pChar)
 {
 	auto charNumber = (u32) (pChar - parser.lineBegin + 1);
@@ -85,14 +79,14 @@ static void skipWhitespace(ProjectParser& parser)
 		case '\n':
 			++parser.cursor;
 			++parser.lineNumber;
-			parser.lineBegin = parser.cursor;
 			skipChar(parser, '\r');
+			parser.lineBegin = parser.cursor;
 			break;
 		case '\r':
 			++parser.cursor;
 			++parser.lineNumber;
-			parser.lineBegin = parser.cursor;
 			skipChar(parser, '\n');
+			parser.lineBegin = parser.cursor;
 			break;
 		case ' ':
 		case '\t':
@@ -347,7 +341,6 @@ Project parseProject(MemStack& mem, StringSlice projectText, ParseProjectError*&
 	parser.end = projectText.end;
 	parser.lineNumber = 1;
 	parser.lineBegin = projectText.begin;
-	parser.hardError = false;
 
 	Project project = {};
 

@@ -87,10 +87,6 @@ struct ProjectParser
 	RawProgram *programs;
 
 	ParseProjectError *errors;
-
-	// When set, the rest of the text is impossible or unlikely to parse
-	// successfully, and parsing should be halted immediately
-	bool hardError;
 };
 
 struct Project
