@@ -1,93 +1,41 @@
 Version 1.0
 
-VertexShader emptyHereString HERE:HERE
-VertexShader hereStringMarkerEndChar HERE::HERE
-VertexShader hereStringSingleSpace HERE: HERE
-VertexShader hereStringOtherMarker ---:---
-VertexShader hereStringNewline
----:
----
-
-VertexShader vertShader
+VertexShader vs
 ---:
 #version 330
 
-void main() { }
----
+out vec3 vertColor;
 
-TessControlShader tessControlShader
----:
-#version 330
-
-void main() { }
----
-
-TessEvaluationShader tessEvaluationShader
----:
-#version 330
-
-void main() { }
----
-
-GeometryShader geomShader
----:
-#version 330
-
-void main() { }
----
-
-FragmentShader fragShader
----:
-#version 330
-
-void main() { }
----
-
-
-ComputeShader computeShader
----:
-#version 330
-
-void main() { }
----
-
-Program progEmpty1{}
-Program progEmpty2 {}
-Program progEmpty3{ }
-Program progEmpty4 { }
-Program progSingle1{vertShader}
-Program progSingle2{ vertShader }
-Program progSingle3 { vertShader }
-Program progMultiple1{vertShader geomShader fragShader}
-Program progMultiple2{ vertShader geomShader fragShader }
-Program progMultiple3 { vertShader geomShader fragShader }
-
-Program progMultipleNewline1 {
-	vertShader
-	geomShader
-	fragShader
-}
-
-Program progMultipleNewline2
+void main()
 {
-	vertShader
-	geomShader
-	fragShader
-}
+    const vec2 positions[3] = vec2[3](
+        vec2(-0.5f, -0.5f),
+        vec2(0.5f, -0.5f),
+        vec2(0.0f, 0.5f));
 
-Program simpleProgram {
-	vertShader
-	fragShader
-}
+    const vec3 colors[3] = vec3[3](
+        vec3(1.0f, 0.0f, 0.0f),
+        vec3(0.0f, 1.0f, 0.0f),
+        vec3(0.0f, 0.0f, 1.0f));
 
-Program tessProgram {
-	vertShader
-	tessControlShader
-	tessEvaluationShader
-	fragShader
+    gl_Position = vec4(positions[gl_VertexID], 0.0f, 1.0f);
+    vertColor = colors[gl_VertexID];
 }
+---
 
-Program computeProgram {
-	computeShader
+FragmentShader fs
+---:
+#version 330
+
+in vec3 vertColor;
+
+out vec4 fragColor;
+
+void main()
+{
+    fragColor = vec4(vertColor, 1.0);
 }
+---
+
+Program program{vs fs}
 

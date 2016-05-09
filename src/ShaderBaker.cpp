@@ -12,6 +12,42 @@
 #define memStackPushArray(mem, type, size) (type*) memStackPush(mem, (size) * sizeof(type))
 #define unreachable() assert(false)
 
+//TODO the include and struct do not belong here. They are here
+// temporarily because of a circular dependency.
+#include "Project.h"
+struct ApplicationState
+{
+	MemStack permMem, scratchMem;
+
+	AsciiFont font;
+
+	FillRectRenderConfig fillRectRenderConfig;
+	TextRenderConfig textRenderConfig;
+
+	UserRenderConfig userRenderConfig;
+
+	char *keyBuffer;
+	size_t keyBufferLength;
+
+	unsigned windowWidth, windowHeight;
+
+	char commandLine[256];
+	size_t commandLineLength, commandLineCapacity;
+
+	MicroSeconds currentTime;
+
+	bool loadProject;
+	FilePath projectPath;
+	Project project;
+	StringSlice previewProgramName;
+//TODO concatenate these error types at project load time
+	StringSlice readProjectFileError;
+	ProjectErrors projectErrors;
+	StringSlice vertShaderErrors;
+	StringSlice fragShaderErrors;
+	StringSlice programErrors;
+};
+
 static bool memStackInit(MemStack& stack, size_t capacity)
 {
 	assert(capacity > 0);
@@ -55,6 +91,8 @@ inline void memStackClear(MemStack& mem)
 	mem.top = mem.begin;
 }
 
+/// Finds the length of a C string, excluding the null terminator
+/// Examples: "" -> 0, "abc123" -> 6
 inline size_t cStringLength(char *c)
 {
 	auto end = c;
@@ -127,6 +165,37 @@ inline StringSlice unpackString(PackedString str)
 	auto begin = (char*) (sizePtr + 1);
 	auto end = begin + (*sizePtr);
 	return StringSlice{begin, end};
+}
+
+static void u32ToString(MemStack& mem, u32 value, char*& result, u32& length)
+{
+	// 10 characters is large enough to hold any 32 bit integer
+	result = memStackPushArray(mem, char, 10);
+	auto resultEnd = result;
+	// This loop always has to execute at least once.
+	// Otherwise, nothing gets printed for zero.
+	do
+	{
+		*resultEnd = (value % 10) + '0';
+		value /= 10;
+		++resultEnd;
+	} while (value > 0);
+	length = (u32) (resultEnd - result);
+
+	// reverse the string
+	u32 lo = 0;
+	u32 hi = length - 1;
+	while (lo < hi)
+	{
+		char tmp = result[lo];
+		result[lo] = result[hi];
+		result[hi] = tmp;
+		++lo;
+		--hi;
+	}
+
+	// "deallocate" the extra space
+	mem.top = (u8*) resultEnd;
 }
 
 inline i32 rectWidth(RectI32 const& rect)
@@ -541,7 +610,6 @@ bool initApplication(ApplicationState& appState)
 
 	appState.textRenderConfig.program = glCreateProgram();
 
-	appState.loadUserRenderConfig = false;
 	initUserRenderConfig(appState.userRenderConfig);
 
 	if (!initFillRectProgram(appState.fillRectRenderConfig.program))
@@ -775,252 +843,240 @@ static inline void processKeyBuffer(ApplicationState& appState)
 	}
 }
 
-void freeInfoLogTextChunks(InfoLogTextChunk*& chunks, InfoLogTextChunk*& freeList)
-{
-	while (chunks != nullptr)
-	{
-		auto freed = chunks;
-		chunks = chunks->next;
-		freed->next = freeList;
-		freeList = freed;
-	}
-}
-
-static void copyLogToTextChunks(
-	MemStack& permMem,
-	InfoLogTextChunk*& result,
-	InfoLogTextChunk*& freeList,
-	GLchar* log,
-	GLint logLength)
-{
-	result = nullptr;
-	for (;;)
-	{
-		InfoLogTextChunk *textChunk;
-		if (freeList == nullptr)
-		{
-			textChunk = memStackPushType(permMem, InfoLogTextChunk);
-		} else
-		{
-			textChunk = freeList;
-			freeList = freeList->next;
-		}
-		textChunk->next = result;
-		result = textChunk;
-
-		auto chunkSize = (u32) sizeof(result->text);
-		if ((u32) logLength < chunkSize)
-		{
-			result->count = logLength;
-			memcpy(result->text, log, logLength);
-			return;
-		} else
-		{
-			result->count = chunkSize;
-			memcpy(result->text, log, chunkSize);
-			logLength -= chunkSize;
-			log += chunkSize;
-		}
-	}
-}
-
-void readShaderLog(
-	MemStack& permMem,
-	MemStack& scratchMem,
-	GLint shader,
-	InfoLogTextChunk*& result,
-	InfoLogTextChunk*& freeList)
+StringSlice readShaderLog(MemStack& mem, GLint shader)
 {
 	GLint logLength;
 	glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &logLength);
 
-	auto log = memStackPushArray(scratchMem, GLchar, logLength);
+	auto log = memStackPushArray(mem, GLchar, logLength);
 	GLsizei readLogLength;
 	glGetShaderInfoLog(shader, logLength, &readLogLength, log);
-
-	copyLogToTextChunks(permMem, result, freeList, log, logLength - 1);
+	// pop the null terminator
+	mem.top -= sizeof(GLchar);
+	return StringSlice{log, log + logLength - 1};
 }
 
-void readProgramLog(
-	MemStack& permMem,
-	MemStack& scratchMem,
-	GLint program,
-	InfoLogTextChunk*& result,
-	InfoLogTextChunk*& freeList)
+StringSlice readProgramLog(MemStack& mem, GLint program)
 {
 	GLint logLength;
 	glGetProgramiv(program, GL_INFO_LOG_LENGTH, &logLength);
 
-	auto log = memStackPushArray(scratchMem, GLchar, logLength);
+	auto log = memStackPushArray(mem, GLchar, logLength);
 	GLsizei readLogLength;
 	glGetProgramInfoLog(program, logLength, &readLogLength, log);
-
-	copyLogToTextChunks(permMem, result, freeList, log, logLength - 1);
+	// pop the null terminator
+	mem.top -= sizeof(GLchar);
+	return StringSlice{log, log + logLength - 1};
 }
 
-void loadUserShader(
-	MemStack& permMem,
-	MemStack& scratchMem,
-	GLint shader,
-	FilePath shaderPath,
-	InfoLogTextChunk*& errorLog,
-	InfoLogTextChunk*& errorLogFreeList)
+void loadUserShader(MemStack& mem, GLint shader, StringSlice source, StringSlice& compileErrors)
 {
-	freeInfoLogTextChunks(errorLog, errorLogFreeList);
+//TODO there is no guarantee that the shader source will fit in a GLint - bulletproof this
+	auto shaderSourceLength = (GLint) stringSliceLength(source);
+	glShaderSource(shader, 1, (GLchar**) &source.begin, &shaderSourceLength);
+	glCompileShader(shader);
+	if (shaderCompileSuccessful(shader))
+	{
+		compileErrors = {};
+	} else
+	{
+		compileErrors = readShaderLog(mem, shader);
+	}
+}
+
+void loadProject(MemStack& permMem, MemStack& scratchMem, ApplicationState& app)
+{
+	memStackClear(permMem);
+	app.readProjectFileError = {};
+	app.projectErrors = {};
+	app.vertShaderErrors = {};
+	app.fragShaderErrors = {};
+	app.programErrors = {};
+
+	auto memMarker = memStackMark(scratchMem);
 
 	ReadFileError readError;
-	u8* fileContents;
+	u8 *fileContents;
 	size_t fileSize;
-	PLATFORM_readWholeFile(scratchMem, shaderPath, readError, fileContents, fileSize);
+	PLATFORM_readWholeFile(scratchMem, app.projectPath, readError, fileContents, fileSize);
 	if (fileContents == nullptr)
 	{
 		char *errorString;
 		switch (readError)
 		{
 		case ReadFileError::FileNotFound:
-			errorString = "The shader file does not exist";
+			errorString = "The project file does not exist";
 			break;
 		case ReadFileError::FileInUse:
-			errorString = "The shader file is in use by another process";
+			errorString = "The project file is in use by another process";
 			break;
 		case ReadFileError::AccessDenied:
 			errorString =
-				"The Operating System denied access to the shader file. You may have insufficient \
+				"The Operating System denied access to the project file. You may have insufficient \
 				permissions, or the file may be pending deletion.";
 			break;
 		case ReadFileError::Other:
-			errorString = "The shader file could not be read";
+			unreachable();
+			errorString = "The project file could not be read";
 			break;
 		default:
 			unreachable();
 			errorString = "";
 		}
+
 		auto errorStringLength = (GLint) cStringLength(errorString);
-		copyLogToTextChunks(permMem, errorLog, errorLogFreeList, errorString, errorStringLength);
-		return;
+		app.readProjectFileError.begin = memStackPushArray(permMem, char, errorStringLength);
+		app.readProjectFileError.end = app.readProjectFileError.begin + errorStringLength;
+		memcpy(app.readProjectFileError.begin, errorString, errorStringLength);
+		goto cleanup;
 	}
 
-//TODO there is no guarantee that fileSize is big enough to fit in a GLint - bulletproof this
-	auto fileSizeTruncated = (GLint) fileSize;
-	glShaderSource(shader, 1, (GLchar**) &fileContents, &fileSizeTruncated);
-	glCompileShader(shader);
-	if (!shaderCompileSuccessful(shader))
 	{
-		readShaderLog(permMem, scratchMem, shader, errorLog, errorLogFreeList);
+		StringSlice projectText{(char*) fileContents, (char*) fileContents + fileSize}; 
+		app.project = parseProject(scratchMem, permMem, projectText, app.projectErrors);
 	}
-}
 
-void loadUserRenderConfig(
-	MemStack& permMem,
-	MemStack& scratchMem,
-	FilePath vertShaderPath,
-	FilePath fragShaderPath,
-	UserRenderConfig const& renderConfig,
-	InfoLogErrors& infoLogErrors)
-{
-	auto memMarker = memStackMark(scratchMem);
+	if (app.projectErrors.count != 0)
+	{
+		goto cleanup;
+	}
 
-	loadUserShader(
-		permMem,
-		scratchMem,
-		renderConfig.vertShader,
-		vertShaderPath,
-		infoLogErrors.vertShaderErrors,
-		infoLogErrors.freeList);
-	loadUserShader(
-		permMem,
-		scratchMem,
-		renderConfig.fragShader,
-		fragShaderPath,
-		infoLogErrors.fragShaderErrors,
-		infoLogErrors.freeList);
-	if (infoLogErrors.vertShaderErrors != nullptr
-		|| infoLogErrors.fragShaderErrors != nullptr)
+	if (stringSliceLength(app.previewProgramName) == 0)
+	{
+		goto cleanup;
+	}
+
+	Program *previewProgram = nullptr;
+	for (u32 i = 0; i < app.project.programCount; ++i)
+	{
+		auto projectName = app.project.programs[i].name;
+		if (unpackString(projectName) == app.previewProgramName)
+		{
+			previewProgram = app.project.programs + i;
+		}
+	}
+	if (previewProgram == nullptr)
+	{
+//TODO report error - could not find user program
+		goto cleanup;
+	}
+
+//TODO this loop is just to get things working for now. It should
+// be loading whatever the user gives us, rather than picking an
+// arbitrary vertex and fragment shader.
+	Shader *vertShader = nullptr;
+	Shader *fragShader = nullptr;
+	for (u32 i = 0; i < previewProgram->attachedShaderCount; ++i)
+	{
+		auto pShader = previewProgram->attachedShaders[i];
+		if (pShader->type == ShaderType::Vertex)
+		{
+			vertShader = pShader;
+		}
+		if (pShader->type == ShaderType::Fragment)
+		{
+			fragShader = pShader;
+		}
+	}
+	if (vertShader == nullptr || fragShader == nullptr)
+	{
+		goto cleanup;
+	}
+
+	auto vertShaderSource = unpackString(vertShader->source);
+	loadUserShader(permMem, app.userRenderConfig.vertShader, vertShaderSource, app.vertShaderErrors);
+
+	auto fragShaderSource = unpackString(fragShader->source);
+	loadUserShader(permMem, app.userRenderConfig.fragShader, fragShaderSource, app.fragShaderErrors);
+
+	if (app.vertShaderErrors.begin != nullptr || app.fragShaderErrors.begin != nullptr)
 	{
 		goto cleanup;
 	}
 	
-	glLinkProgram(renderConfig.program);
-	if (!programLinkSuccessful(renderConfig.program))
+	glLinkProgram(app.userRenderConfig.program);
+	if (!programLinkSuccessful(app.userRenderConfig.program))
 	{
-		freeInfoLogTextChunks(infoLogErrors.programErrors, infoLogErrors.freeList);
-		readProgramLog(
-			permMem,
-			scratchMem,
-			renderConfig.program,
-			infoLogErrors.programErrors,
-			infoLogErrors.freeList);
+		app.programErrors = readProgramLog(permMem, app.userRenderConfig.program);
 	}
 
 cleanup:
 	memStackPop(scratchMem, memMarker);
 }
 
-void infoLogToTextLines(
-	MemStack& scratchMem,
-	AsciiFont const& font,
-	char *header,
-	InfoLogTextChunk *textChunks,
-	i32 leftEdge,
-	i32& baseline)
+void pushSingleTextLine(MemStack& mem, StringSlice str)
 {
-	if (textChunks == nullptr)
+	auto textLine = memStackPushType(mem, TextLine);
+	textLine->text = str;
+}
+
+void pushMultiTextLine(MemStack& mem, StringSlice str)
+{
+	auto lineBegin = str.begin;
+	auto p = str.begin;
+	while (p != str.end)
 	{
-		return;
-	}
-
-	{
-		auto textLine = memStackPushType(scratchMem, TextLine);
-		textLine->leftEdge = leftEdge;
-		textLine->baseline = baseline;
-		textLine->text = stringSliceFromCString(header);
-		baseline -= font.advanceY;
-	}
-
-	while (textChunks != nullptr)
-	{
-		auto pChar = textChunks->text;
-		auto pCharEnd = pChar + textChunks->count;
-		textChunks = textChunks->next;
-
-		auto textLine = memStackPushType(scratchMem, TextLine);
-		textLine->leftEdge = leftEdge;
-		textLine->baseline = baseline;
-		textLine->text.begin = pChar;
-
-		while (pChar != pCharEnd)
+		if (*p == '\n')
 		{
-			if (*pChar == '\n')
-			{
-				textLine->text.end = pChar;
-				baseline -= font.advanceY;
-
-				textLine = memStackPushType(scratchMem, TextLine);
-				textLine->leftEdge = leftEdge;
-				textLine->baseline = baseline;
-				textLine->text.begin = pChar + 1;
-			}
-			++pChar;
+			auto textLine = memStackPushType(mem, TextLine);
+			textLine->text = StringSlice{lineBegin, p};
+			lineBegin = p + 1;
 		}
-		textLine->text.end = pCharEnd;
+		++p;
 	}
+	auto textLine = memStackPushType(mem, TextLine);
+	textLine->text = StringSlice{lineBegin, str.end};
+}
 
-	baseline -= font.advanceY;
+char* projectErrorTypeToString(ProjectErrorType errorType)
+{
+	switch (errorType)
+	{
+	case ProjectErrorType::MissingVersionStatement:
+		return "First statement in document should be a 'Version' statement";
+	case ProjectErrorType::VersionInvalidFormat:
+		return "Version number is not correctly formatted. It should have the syntax \"Major.Minor\", where \"Major\" and \"Minor\" are numbers";
+	case ProjectErrorType::UnsupportedVersion:
+		return "Unsupported version - this parser only supports version 1.0";
+	case ProjectErrorType::UnknownValueType:
+		return "Unknown type for value";
+	case ProjectErrorType::MissingHereStringMarker:
+		return "Expected marker token for here string";
+	case ProjectErrorType::UnclosedHereStringMarker:
+		return "Unclosed here string marker. Markers must be closed with a ':'";
+	case ProjectErrorType::HereStringMarkerWhitespace:
+		return "Here string markers contains whitespace";
+	case ProjectErrorType::EmptyHereStringMarker:
+		return "Here string marker is empty";
+	case ProjectErrorType::UnclosedHereString:
+		return "Here string not closed. Make sure its marker ends with a ':'";
+	case ProjectErrorType::ShaderMissingIdentifier:
+		return "Expected name for shader";
+	case ProjectErrorType::ProgramMissingShaderList:
+		return "Expected a shader list to follow the program name";
+	case ProjectErrorType::ProgramUnclosedShaderList:
+		return "Unclosed attached shader list";
+	case ProjectErrorType::DuplicateShaderName:
+		return "Another shader in this project has the same name";
+	case ProjectErrorType::DuplicateProgramName:
+		return "Another program in this project has the same name";
+	case ProjectErrorType::ProgramExceedsAttachedShaderLimit:
+		return "Programs cannot have more than 255 shaders attached";
+	case ProjectErrorType::ProgramUnresolvedShaderIdent:
+		return "No shader with this name exists in this project";
+	default:
+		unreachable();
+		return "???";
+	}
 }
 
 void updateApplication(ApplicationState& appState)
 {
 	processKeyBuffer(appState);
-	if (appState.loadUserRenderConfig)
+	if (appState.loadProject)
 	{
-		loadUserRenderConfig(
-			appState.permMem,
-			appState.scratchMem,
-			appState.userVertShaderPath,
-			appState.userFragShaderPath,
-			appState.userRenderConfig,
-			appState.infoLogErrors);
-		appState.loadUserRenderConfig = false;
+		loadProject(appState.permMem, appState.scratchMem, appState);
+		appState.loadProject = false;
 	}
 
 	auto windowWidth = (i32) appState.windowWidth;
@@ -1067,9 +1123,11 @@ void updateApplication(ApplicationState& appState)
 
 	glViewport(0, 0, windowWidth, windowHeight);
 
-	if (appState.infoLogErrors.vertShaderErrors != nullptr
-		|| appState.infoLogErrors.fragShaderErrors != nullptr
-		|| appState.infoLogErrors.programErrors != nullptr)
+	if (appState.readProjectFileError.begin != nullptr
+		|| appState.projectErrors.count > 0
+		|| appState.vertShaderErrors.begin != nullptr
+		|| appState.fragShaderErrors.begin != nullptr
+		|| appState.programErrors.begin != nullptr)
 	{
 		auto windowWidthF = (float) appState.windowWidth;
 		auto windowHeightF = (float) appState.windowHeight;
@@ -1088,6 +1146,47 @@ void updateApplication(ApplicationState& appState)
 
 	auto memMarker = memStackMark(appState.scratchMem);
 
+	auto projectErrorLocations = memStackPushArray(
+		appState.scratchMem, PackedString, appState.projectErrors.count);
+	for (u32 i = 0; i < appState.projectErrors.count; ++i)
+	{
+		auto pStringLength = memStackPushType(appState.scratchMem, size_t);
+		auto pStringBegin = appState.scratchMem.top;
+
+		auto error = appState.projectErrors.ptr[i];
+
+		{
+			auto str = stringSliceFromCString("Line ");
+			auto strLength = stringSliceLength(str);
+			auto ptr = memStackPushArray(appState.scratchMem, char, strLength);
+			memcpy(ptr, str.begin, strLength);
+		}
+
+		{
+			char *unused1;
+			u32 unused2;
+			u32ToString(appState.scratchMem, error.lineNumber, unused1, unused2);
+		}
+
+		{
+			auto str = stringSliceFromCString(", char ");
+			auto strLength = stringSliceLength(str);
+			auto ptr = memStackPushArray(appState.scratchMem, char, strLength);
+			memcpy(ptr, str.begin, strLength);
+		}
+
+		{
+			char *unused1;
+			u32 unused2;
+			u32ToString(appState.scratchMem, error.charNumber, unused1, unused2);
+		}
+
+		auto pStringEnd = appState.scratchMem.top;
+		*pStringLength = pStringEnd - pStringBegin;
+
+		projectErrorLocations[i] = PackedString{pStringLength};
+	}
+
 	auto textLinesBegin = (TextLine*) appState.scratchMem.top;
 	{
 		auto commandLineText = memStackPushType(appState.scratchMem, TextLine);
@@ -1097,29 +1196,61 @@ void updateApplication(ApplicationState& appState)
 		commandLineText->text.end = appState.commandLine + appState.commandLineLength;
 	}
 	{
-		auto infoLogLeftEdge = errorOverlayArea.min.x + 5;
-		auto infoLogBaseline = errorOverlayArea.max.y - 20;
-		infoLogToTextLines(
-			appState.scratchMem,
-			appState.font,
-			"Errors in vertex shader:",
-			appState.infoLogErrors.vertShaderErrors,
-			infoLogLeftEdge,
-			infoLogBaseline);
-		infoLogToTextLines(
-			appState.scratchMem,
-			appState.font,
-			"Errors in fragment shader:",
-			appState.infoLogErrors.fragShaderErrors,
-			infoLogLeftEdge,
-			infoLogBaseline);
-		infoLogToTextLines(
-			appState.scratchMem,
-			appState.font,
-			"Errors in program:",
-			appState.infoLogErrors.programErrors,
-			infoLogLeftEdge,
-			infoLogBaseline);
+		auto infoLogTextLinesBegin = (TextLine*) appState.scratchMem.top;
+
+		if (appState.readProjectFileError.begin != nullptr)
+		{
+			pushSingleTextLine(appState.scratchMem, stringSliceFromCString("Unable to read project file:"));
+			pushMultiTextLine(appState.scratchMem, appState.readProjectFileError);
+		}
+
+		if (appState.projectErrors.count > 0)
+		{
+			pushSingleTextLine(appState.scratchMem, stringSliceFromCString("Errors in project file:"));
+			for (u32 i = 0; i < appState.projectErrors.count; ++i)
+			{
+				pushSingleTextLine(appState.scratchMem, unpackString(projectErrorLocations[i]));
+				auto error = appState.projectErrors.ptr[i];
+				auto errorMessage = projectErrorTypeToString(error.type);
+				pushSingleTextLine(appState.scratchMem, stringSliceFromCString(errorMessage));
+				pushSingleTextLine(appState.scratchMem, stringSliceFromCString(">>>>>"));
+				pushMultiTextLine(appState.scratchMem, unpackString(error.context));
+				pushSingleTextLine(appState.scratchMem, stringSliceFromCString(">>>>>"));
+				StringSlice emptyString = {};
+				pushSingleTextLine(appState.scratchMem, emptyString);
+			}
+		}
+
+		if (appState.vertShaderErrors.begin != nullptr)
+		{
+			pushSingleTextLine(appState.scratchMem, stringSliceFromCString("Errors in vertex shader:"));
+			pushMultiTextLine(appState.scratchMem, appState.vertShaderErrors);
+		}
+
+		if (appState.fragShaderErrors.begin != nullptr)
+		{
+			pushSingleTextLine(appState.scratchMem, stringSliceFromCString("Errors in fragment shader:"));
+			pushMultiTextLine(appState.scratchMem, appState.fragShaderErrors);
+		}
+
+		if (appState.programErrors.begin != nullptr)
+		{
+			pushSingleTextLine(appState.scratchMem, stringSliceFromCString("Errors in program:"));
+			pushMultiTextLine(appState.scratchMem, appState.programErrors);
+		}
+
+		auto infoLogTextLinesEnd = (TextLine*) appState.scratchMem.top;
+
+		auto textLeftEdge = errorOverlayArea.min.x + 5;
+		auto textBaseline = errorOverlayArea.max.y - 20;
+		auto pTextLine = infoLogTextLinesBegin;
+		while (pTextLine != infoLogTextLinesEnd)
+		{
+			pTextLine->leftEdge = textLeftEdge;
+			pTextLine->baseline = textBaseline;
+			textBaseline -= appState.font.advanceY;
+			++pTextLine;
+		}
 	}
 	auto textLinesEnd = (TextLine*) appState.scratchMem.top;
 

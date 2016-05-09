@@ -114,37 +114,6 @@ static bool parseU32Base10(StringSlice str, u32& result)
 	return str.end != str.begin;
 }
 
-static void u32ToString(MemStack& mem, u32 value, char*& result, u32& length)
-{
-	// 10 characters is large enough to hold any 32 bit integer
-	result = memStackPushArray(mem, char, 10);
-	auto resultEnd = result;
-	// This loop always has to execute at least once.
-	// Otherwise, nothing gets printed for zero.
-	do
-	{
-		*resultEnd = (value % 10) + '0';
-		value /= 10;
-		++resultEnd;
-	} while (value > 0);
-	length = (u32) (resultEnd - result);
-
-	// reverse the string
-	u32 lo = 0;
-	u32 hi = length - 1;
-	while (lo < hi)
-	{
-		char tmp = result[lo];
-		result[lo] = result[hi];
-		result[hi] = tmp;
-		++lo;
-		--hi;
-	}
-
-	// "deallocate" the extra space
-	mem.top = (u8*) resultEnd;
-}
-
 static bool readHereString(MemStack& mem, ProjectParser& parser, StringSlice& result)
 {
 	auto hereStringLocation = parserTextLocation(parser);

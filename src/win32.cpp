@@ -29,7 +29,6 @@ static HANDLE openFile(MemStack& scratchMem, FilePath const filePath)
 	memcpy(fileNameCString, filePath.path.begin, filePathLength);
 	fileNameCString[filePathLength] = 0;
 	return CreateFileA(fileNameCString, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
-	
 }
 
 static ReadFileError getReadFileError()
@@ -341,7 +340,7 @@ static char* skipWhitespace(char *ptr)
 	return ptr;
 }
 
-static char* readArg(char *ptr, StringSlice& result)
+static void readArg(char*& ptr, StringSlice& result)
 {
 	ptr = skipWhitespace(ptr);
 	result.begin = ptr;
@@ -355,87 +354,14 @@ static char* readArg(char *ptr, StringSlice& result)
 		++ptr;
 	}
 	result.end = ptr;
-	return ptr;
 }
 
-int main(char argc, char **argv)
-{
-	MemStack scratchMem = {};
-	memStackInit(scratchMem, 1024 * 1024);
-
-	MemStack permMem = {};
-	memStackInit(permMem, 1024 * 1024);
-
-	auto projectFileName = stringSliceFromCString("../../project.sb");
-	FilePath projectFilePath{projectFileName};
-
-	FILETIME lastWriteTime = {};
-	for (;;)
-	{
-		auto memMarker = memStackMark(scratchMem);
-
-		Sleep(250);
-
-		FILETIME writeTime = {};
-		if (!getFileWriteTime(scratchMem, projectFilePath, writeTime))
-		{
-			writeTime = {};
-		}
-		if (!fileTimesEqual(writeTime, lastWriteTime))
-		{
-			ReadFileError readError;
-			u8 *fileContents;
-			size_t fileSize;
-			PLATFORM_readWholeFile(scratchMem, projectFilePath, readError, fileContents, fileSize);
-			if (fileContents != nullptr)
-			{
-				if (*fileContents == '!')
-				{
-					return 0;
-				}
-
-				lastWriteTime = writeTime;
-
-				StringSlice projectText{(char*) fileContents, (char*) fileContents + fileSize}; 
-
-				auto permMemMarker = memStackMark(permMem);
-				ProjectErrors projectErrors;
-				auto project = parseProject(scratchMem, permMem, projectText, projectErrors);
-
-				system("cls");
-				if (projectErrors.count == 0)
-				{
-					printf("Parse succeeded:\n");
-					DEBUG_printProject(project);
-				} else
-				{
-					printf("Errors:\n");
-					DEBUG_printErrors(projectErrors);
-				}
-
-				memStackPop(permMem, permMemMarker);
-			}
-		}
-
-		memStackPop(scratchMem, memMarker);
-	}
-}
-
-#if 0
 int CALLBACK WinMain(
 	HINSTANCE hInstance,
 	HINSTANCE hPrevInstance,
 	LPSTR lpCmdLine,
 	int nCmdShow)
 {
-	FilePath userVertShaderPath = {};
-	FilePath userFragShaderPath = {};
-	{
-		auto commandLinePtr = lpCmdLine;
-		commandLinePtr = readArg(commandLinePtr, userVertShaderPath.path);
-		commandLinePtr = readArg(commandLinePtr, userFragShaderPath.path);
-	}
-
 	const char windowClassName[] = "Shader Baker Class";
 
 	WNDCLASS wc = {};
@@ -477,16 +403,25 @@ int CALLBACK WinMain(
 
 	appState.keyBuffer = keyBuffer;
 
-	if (stringSliceLength(userVertShaderPath.path) != 0
-		&& stringSliceLength(userFragShaderPath.path) != 0)
 	{
-		appState.userVertShaderPath = userVertShaderPath;
-		appState.userFragShaderPath = userFragShaderPath;
-		appState.loadUserRenderConfig = true;
+		StringSlice arg1 = {};
+		StringSlice arg2 = {};
+		auto commandLinePtr = lpCmdLine;
+		readArg(commandLinePtr, arg1);
+		readArg(commandLinePtr, arg2);
+
+		if (stringSliceLength(arg1) != 0)
+		{
+			appState.projectPath = FilePath{arg1};
+			if (stringSliceLength(arg2) != 0)
+			{
+				appState.previewProgramName = arg2;
+			}
+			appState.loadProject = true;
+		}
 	}
 
-	FILETIME lastVertShaderWriteTime = {};
-	FILETIME lastFragShaderWriteTime = {};
+	FILETIME lastProjectFileWriteTime = {};
 
 	LARGE_INTEGER qpcFreq;
 	QueryPerformanceFrequency(&qpcFreq);
@@ -512,27 +447,15 @@ int CALLBACK WinMain(
 		{
 			auto memMarker = memStackMark(appState.scratchMem);
 			FILETIME writeTime = {};
-
-			if (!getFileWriteTime(appState.scratchMem, userVertShaderPath, writeTime))
+			if (!getFileWriteTime(appState.scratchMem, appState.projectPath, writeTime))
 			{
 				writeTime = {};
 			}
-			if (!fileTimesEqual(writeTime, lastVertShaderWriteTime))
+			if (!fileTimesEqual(writeTime, lastProjectFileWriteTime))
 			{
-				lastVertShaderWriteTime = writeTime;
-				appState.loadUserRenderConfig = true;
+				lastProjectFileWriteTime = writeTime;
+				appState.loadProject = true;
 			}
-
-			if (!getFileWriteTime(appState.scratchMem, userFragShaderPath, writeTime))
-			{
-				writeTime = {};
-			}
-			if (!fileTimesEqual(writeTime, lastFragShaderWriteTime))
-			{
-				lastFragShaderWriteTime = writeTime;
-				appState.loadUserRenderConfig = true;
-			}
-
 			memStackPop(appState.scratchMem, memMarker);
 		}
 
@@ -548,7 +471,6 @@ exit:
 	destroyApplication(appState);
 	return 0;
 }
-#endif
 
 LRESULT CALLBACK windowProc(
 	HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)

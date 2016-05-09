@@ -1,0 +1,93 @@
+Version 1.0
+
+VertexShader emptyHereString HERE:HERE
+VertexShader hereStringMarkerEndChar HERE::HERE
+VertexShader hereStringSingleSpace HERE: HERE
+VertexShader hereStringOtherMarker ---:---
+VertexShader hereStringNewline
+---:
+---
+
+VertexShader vertShader
+---:
+#version 330
+
+void main() { }
+---
+
+TessControlShader tessControlShader
+---:
+#version 330
+
+void main() { }
+---
+
+TessEvaluationShader tessEvaluationShader
+---:
+#version 330
+
+void main() { }
+---
+
+GeometryShader geomShader
+---:
+#version 330
+
+void main() { }
+---
+
+FragmentShader fragShader
+---:
+#version 330
+
+void main() { }
+---
+
+
+ComputeShader computeShader
+---:
+#version 330
+
+void main() { }
+---
+
+Program progEmpty1{}
+Program progEmpty2 {}
+Program progEmpty3{ }
+Program progEmpty4 { }
+Program progSingle1{vertShader}
+Program progSingle2{ vertShader }
+Program progSingle3 { vertShader }
+Program progMultiple1{vertShader geomShader fragShader}
+Program progMultiple2{ vertShader geomShader fragShader }
+Program progMultiple3 { vertShader geomShader fragShader }
+
+Program progMultipleNewline1 {
+	vertShader
+	geomShader
+	fragShader
+}
+
+Program progMultipleNewline2
+{
+	vertShader
+	geomShader
+	fragShader
+}
+
+Program simpleProgram {
+	vertShader
+	fragShader
+}
+
+Program tessProgram {
+	vertShader
+	tessControlShader
+	tessEvaluationShader
+	fragShader
+}
+
+Program computeProgram {
+	computeShader
+}
+

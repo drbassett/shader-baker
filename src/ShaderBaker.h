@@ -78,48 +78,6 @@ struct FilePath
 	StringSlice path;
 };
 
-struct InfoLogTextChunk
-{
-	u32 count;
-	InfoLogTextChunk *next;
-	char text[1024];
-};
-
-struct InfoLogErrors
-{
-	InfoLogTextChunk
-		*vertShaderErrors,
-		*fragShaderErrors,
-		*programErrors,
-		*freeList;
-};
-
-struct ApplicationState
-{
-	MemStack permMem, scratchMem;
-
-	AsciiFont font;
-
-	FillRectRenderConfig fillRectRenderConfig;
-	TextRenderConfig textRenderConfig;
-
-	bool loadUserRenderConfig;
-	FilePath userFragShaderPath, userVertShaderPath;
-	UserRenderConfig userRenderConfig;
-
-	InfoLogErrors infoLogErrors;
-
-	char *keyBuffer;
-	size_t keyBufferLength;
-
-	unsigned windowWidth, windowHeight;
-
-	char commandLine[256];
-	size_t commandLineLength, commandLineCapacity;
-
-	MicroSeconds currentTime;
-};
-
 struct Vec2I32
 {
 	i32 x, y;
