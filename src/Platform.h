@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ShaderBaker.h"
+#include "Common.h"
 
 enum class ReadFileError
 {

@@ -1,25 +1,12 @@
 #pragma once
 
-struct MemStack
-{
-	u8 *begin, *top, *end;
-};
-
-struct MemStackMarker
-{
-	u8 *p;
-};
-
-struct StringSlice
-{
-	char *begin, *end;
-};
-
-/// Represents a string with a size and characters packed together in memory contiguously
-struct PackedString
-{
-	void *ptr;
-};
+#include "Types.h"
+#include "Platform.h"
+#include "Common.cpp"
+#include "Project.cpp"
+#include <gl/gl.h>
+#include "../include/glcorearb.h"
+#include "generated/glFunctions.cpp"
 
 struct TextLine
 {
@@ -73,11 +60,6 @@ struct MicroSeconds
 	u64 value;
 };
 
-struct FilePath
-{
-	StringSlice path;
-};
-
 struct Vec2I32
 {
 	i32 x, y;
@@ -86,5 +68,38 @@ struct Vec2I32
 struct RectI32
 {
 	Vec2I32 min, max;
+};
+
+struct ApplicationState
+{
+	MemStack permMem, scratchMem;
+
+	AsciiFont font;
+
+	FillRectRenderConfig fillRectRenderConfig;
+	TextRenderConfig textRenderConfig;
+
+	UserRenderConfig userRenderConfig;
+
+	char *keyBuffer;
+	size_t keyBufferLength;
+
+	unsigned windowWidth, windowHeight;
+
+	char commandLine[256];
+	size_t commandLineLength, commandLineCapacity;
+
+	MicroSeconds currentTime;
+
+	bool loadProject;
+	FilePath projectPath;
+	Project project;
+	StringSlice previewProgramName;
+//TODO concatenate these error types at project load time
+	StringSlice readProjectFileError;
+	ProjectErrors projectErrors;
+	StringSlice vertShaderErrors;
+	StringSlice fragShaderErrors;
+	StringSlice programErrors;
 };
 

@@ -1,13 +1,9 @@
 #pragma warning(push, 3)
-
 #include <windows.h>
-
 #pragma warning(pop)
 
 #include "ShaderBaker.cpp"
-#include "Project.cpp"
 #include "../include/wglext.h"
-#include <cstdio>
 
 //TODO printf does not work with Win32 GUI out of the box. Need to do something with AttachConsole/AllocConsole to make it work.
 #define FATAL(message) printf(message); return 1;
