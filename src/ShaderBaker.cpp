@@ -921,41 +921,19 @@ void updateApplication(ApplicationState& appState)
 		appState.scratchMem, PackedString, appState.projectErrors.count);
 	for (u32 i = 0; i < appState.projectErrors.count; ++i)
 	{
-		auto pStringLength = memStackPushType(appState.scratchMem, size_t);
-		auto pStringBegin = appState.scratchMem.top;
-
 		auto error = appState.projectErrors.ptr[i];
 
-		{
-			auto str = stringSliceFromCString("Line ");
-			auto strLength = stringSliceLength(str);
-			auto ptr = memStackPushArray(appState.scratchMem, char, strLength);
-			memcpy(ptr, str.begin, strLength);
-		}
+		char *unused1;
+		u32 unused2;
 
-		{
-			char *unused1;
-			u32 unused2;
-			u32ToString(appState.scratchMem, error.lineNumber, unused1, unused2);
-		}
+		auto lineBuilder = beginPackedString(appState.scratchMem);
+		memStackPushCString(appState.scratchMem, "Line ");
+		u32ToString(appState.scratchMem, error.lineNumber, unused1, unused2);
+		memStackPushCString(appState.scratchMem, ", char ");
+		u32ToString(appState.scratchMem, error.charNumber, unused1, unused2);
+		auto line = endPackedString(appState.scratchMem, lineBuilder);
 
-		{
-			auto str = stringSliceFromCString(", char ");
-			auto strLength = stringSliceLength(str);
-			auto ptr = memStackPushArray(appState.scratchMem, char, strLength);
-			memcpy(ptr, str.begin, strLength);
-		}
-
-		{
-			char *unused1;
-			u32 unused2;
-			u32ToString(appState.scratchMem, error.charNumber, unused1, unused2);
-		}
-
-		auto pStringEnd = appState.scratchMem.top;
-		*pStringLength = pStringEnd - pStringBegin;
-
-		projectErrorLocations[i] = PackedString{pStringLength};
+		projectErrorLocations[i] = line;
 	}
 
 	auto textLinesBegin = (TextLine*) appState.scratchMem.top;

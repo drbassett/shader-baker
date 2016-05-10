@@ -135,6 +135,43 @@ bool operator!=(StringSlice lhs, const char* rhs)
 	return !(lhs == rhs);
 }
 
+inline char* memStackPushString(MemStack& mem, StringSlice str)
+{
+	size_t stringLength = stringSliceLength(str);
+	auto ptr = memStackPushArray(mem, char, stringLength);
+	memcpy(ptr, str.begin, stringLength);
+	return ptr;
+}
+
+inline StringSlice memStackPushCString(MemStack& mem, char *str)
+{
+	StringSlice result;
+	result.begin = (char*) mem.top;
+	while (*str != '\0')
+	{
+		auto pChar = memStackPushType(mem, char);
+		*pChar = *str;
+		++str;
+	}
+	result.end = (char*) mem.top;
+	return result;
+}
+
+inline PackedStringBuilder beginPackedString(MemStack& mem)
+{
+	auto begin = memStackPushType(mem, size_t);
+	return PackedStringBuilder{begin};
+}
+
+inline PackedString endPackedString(MemStack& mem, PackedStringBuilder builder)
+{
+	auto sizePtr = (size_t*) builder.begin;
+	auto charPtr = (char*) (sizePtr + 1);
+	size_t stringLength = (char*) mem.top - charPtr;
+	*sizePtr = stringLength;
+	return PackedString{sizePtr};
+}
+
 inline PackedString packString(MemStack& mem, StringSlice str)
 {
 	size_t stringLength = stringSliceLength(str);

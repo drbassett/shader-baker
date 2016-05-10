@@ -652,35 +652,24 @@ returnResult:
 				lastContextLineIdx = lineCount;
 			}
 
-			auto pContextString = memStackPushType(permMem, size_t);
-			auto contextStringBegin = (u8*) permMem.top;
+			auto stringBuilder = beginPackedString(permMem);
 			for (u32 i = firstContextLineIdx; i < lastContextLineIdx; ++i)
 			{
 				auto lineBounds = lines[i];
-				auto lineLength = stringSliceLength(lineBounds);
 
-				// add the line number
-				{
-					char *unused1;
-					u32 unused2;
-					u32ToString(permMem, i + 1, unused1, unused2);
-				}
-
-				auto lineText = memStackPushArray(permMem, char, lineLength + 4);
-				lineText[0] = ' ';
-				lineText[1] = '|';
-				lineText[2] = ' ';
-				memcpy(lineText + 3, lineBounds.begin, lineLength);
-				lineText[lineLength + 4 - 1] = '\n';
+				char *unused1;
+				u32 unused2;
+				u32ToString(permMem, i + 1, unused1, unused2);
+				memStackPushCString(permMem, " | ");
+				memStackPushString(permMem, lineBounds);
+				memStackPushCString(permMem, "\n");
 			}
-			auto contextStringEnd = (u8*) permMem.top;
-			auto contextStringLength = contextStringEnd - contextStringBegin;
-			(*pContextString) = contextStringLength;
+			auto contextString = endPackedString(permMem, stringBuilder);
 
 			errors.ptr[errorIdx].type = pError->type;
 			errors.ptr[errorIdx].lineNumber = pError->location.lineNumber;
 			errors.ptr[errorIdx].charNumber = pError->location.charNumber;
-			errors.ptr[errorIdx].context.ptr = pContextString;
+			errors.ptr[errorIdx].context = contextString;
 
 			pError = pError->next;
 			--errorIdx;

@@ -26,6 +26,11 @@ struct PackedString
 	void *ptr;
 };
 
+struct PackedStringBuilder
+{
+	void *begin;
+};
+
 struct FilePath
 {
 	StringSlice path;
