@@ -48,10 +48,9 @@ struct TextRenderConfig
 	GLint attribLowerLeft, attribCharacterIndex;
 };
 
-struct UserRenderConfig
+struct PreviewRenderConfig
 {
 	GLuint vao;
-	GLint vertShader, fragShader;
 	GLuint program;
 };
 
@@ -79,7 +78,7 @@ struct ApplicationState
 	FillRectRenderConfig fillRectRenderConfig;
 	TextRenderConfig textRenderConfig;
 
-	UserRenderConfig userRenderConfig;
+	PreviewRenderConfig previewRenderConfig;
 
 	char *keyBuffer;
 	size_t keyBufferLength;
@@ -99,8 +98,6 @@ struct ApplicationState
 	StringSlice readProjectFileError;
 	void *projectErrorStrings;
 	u32 projectErrorStringCount;
-	StringSlice vertShaderErrors;
-	StringSlice fragShaderErrors;
-	StringSlice programErrors;
+	PackedString previewProgramErrors;
 };
 

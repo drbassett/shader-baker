@@ -250,42 +250,6 @@ success:
 	return success;
 }
 
-static inline void initUserRenderConfig(UserRenderConfig& userRenderConfig)
-{
-	const char* vsSource = R"(
-		#version 330
-
-		void main() { }
-	)";
-
-	const char* fsSource = R"(
-		#version 330
-
-		out vec4 fragColor;
-
-		void main() { }
-	)";
-
-	glGenVertexArrays(1, &userRenderConfig.vao);
-	userRenderConfig.vertShader = glCreateShader(GL_VERTEX_SHADER);
-	userRenderConfig.fragShader = glCreateShader(GL_FRAGMENT_SHADER);
-	userRenderConfig.program = glCreateProgram();
-
-	glAttachShader(userRenderConfig.program, userRenderConfig.vertShader);
-	glAttachShader(userRenderConfig.program, userRenderConfig.fragShader);
-
-	glShaderSource(userRenderConfig.vertShader, 1, &vsSource, 0);
-	glCompileShader(userRenderConfig.vertShader);
-	assert(shaderCompileSuccessful(userRenderConfig.vertShader));
-
-	glShaderSource(userRenderConfig.fragShader, 1, &fsSource, 0);
-	glCompileShader(userRenderConfig.fragShader);
-	assert(shaderCompileSuccessful(userRenderConfig.fragShader));
-
-	glLinkProgram(userRenderConfig.program);
-	assert(programLinkSuccessful(userRenderConfig.program));
-}
-
 static inline bool readFontFile(
 	MemStack& scratchMem, TextRenderConfig& textRenderConfig, AsciiFont& font, const char *fileName)
 {
@@ -351,10 +315,8 @@ void destroyApplication(ApplicationState& appState)
 	glDeleteVertexArrays(1, &appState.textRenderConfig.vao);
 	glDeleteProgram(appState.textRenderConfig.program);
 
-	glDeleteVertexArrays(1, &appState.userRenderConfig.vao);
-	glDeleteShader(appState.userRenderConfig.vertShader);
-	glDeleteShader(appState.userRenderConfig.fragShader);
-	glDeleteProgram(appState.userRenderConfig.program);
+	glDeleteVertexArrays(1, &appState.previewRenderConfig.vao);
+	glDeleteProgram(appState.previewRenderConfig.program);
 }
 
 static inline size_t megabytes(size_t value)
@@ -415,7 +377,8 @@ bool initApplication(ApplicationState& appState)
 
 	appState.textRenderConfig.program = glCreateProgram();
 
-	initUserRenderConfig(appState.userRenderConfig);
+	glGenVertexArrays(1, &appState.previewRenderConfig.vao);
+	appState.previewRenderConfig.program = glCreateProgram();
 
 	if (!initFillRectProgram(appState.fillRectRenderConfig.program))
 	{
@@ -640,21 +603,6 @@ StringSlice readProgramLog(MemStack& mem, GLint program)
 	return StringSlice{log, log + logLength - 1};
 }
 
-void loadUserShader(MemStack& mem, GLint shader, StringSlice source, StringSlice& compileErrors)
-{
-//TODO there is no guarantee that the shader source will fit in a GLint - bulletproof this
-	auto shaderSourceLength = (GLint) stringSliceLength(source);
-	glShaderSource(shader, 1, (GLchar**) &source.begin, &shaderSourceLength);
-	glCompileShader(shader);
-	if (shaderCompileSuccessful(shader))
-	{
-		compileErrors = {};
-	} else
-	{
-		compileErrors = readShaderLog(mem, shader);
-	}
-}
-
 static char* projectErrorTypeToString(ProjectErrorType errorType)
 {
 	switch (errorType)
@@ -807,22 +755,36 @@ static void stringifyProjectErrors(
 	memStackPop(app.scratchMem, memMarker);
 }
 
-void loadProject(MemStack& permMem, MemStack& scratchMem, ApplicationState& app)
+GLuint glShaderType(ShaderType type)
 {
-	memStackClear(permMem);
+	switch (type)
+	{
+	case ShaderType::Vertex: return GL_VERTEX_SHADER;
+	case ShaderType::TessControl: return GL_TESS_CONTROL_SHADER;
+	case ShaderType::TessEvaluation: return GL_TESS_EVALUATION_SHADER;
+	case ShaderType::Geometry: return GL_GEOMETRY_SHADER;
+	case ShaderType::Fragment: return GL_FRAGMENT_SHADER;
+	case ShaderType::Compute: return GL_COMPUTE_SHADER;
+	}
+
+	unreachable();
+	return GL_VERTEX_SHADER;
+}
+
+void loadProject(ApplicationState& app)
+{
+	memStackClear(app.permMem);
 	app.readProjectFileError = {};
 	app.projectErrorStrings = nullptr;
 	app.projectErrorStringCount = 0;
-	app.vertShaderErrors = {};
-	app.fragShaderErrors = {};
-	app.programErrors = {};
+	app.previewProgramErrors = {};
 
-	auto memMarker = memStackMark(scratchMem);
+	auto memMarker = memStackMark(app.scratchMem);
 
 	ReadFileError readError;
 	u8 *fileContents;
 	size_t fileSize;
-	PLATFORM_readWholeFile(scratchMem, app.projectPath, readError, fileContents, fileSize);
+	PLATFORM_readWholeFile(app.scratchMem, app.projectPath, readError, fileContents, fileSize);
 	if (fileContents == nullptr)
 	{
 		char *errorString;
@@ -849,28 +811,26 @@ void loadProject(MemStack& permMem, MemStack& scratchMem, ApplicationState& app)
 		}
 
 		auto errorStringLength = (GLint) cStringLength(errorString);
-		app.readProjectFileError.begin = memStackPushArray(permMem, char, errorStringLength);
+		app.readProjectFileError.begin = memStackPushArray(app.permMem, char, errorStringLength);
 		app.readProjectFileError.end = app.readProjectFileError.begin + errorStringLength;
 		memcpy(app.readProjectFileError.begin, errorString, errorStringLength);
-		goto cleanup;
+		goto exit1;
 	}
 
 	{
 		StringSlice projectText{(char*) fileContents, (char*) fileContents + fileSize}; 
 		ProjectErrors projectErrors = {};
-		app.project = parseProject(scratchMem, permMem, projectText, projectErrors);
+		app.project = parseProject(app.scratchMem, app.permMem, projectText, projectErrors);
 		if (projectErrors.count != 0)
 		{
 			stringifyProjectErrors(app, projectText, projectErrors);
-			goto cleanup;
+			goto exit1;
 		}
 	}
-	
-
 
 	if (stringSliceLength(app.previewProgramName) == 0)
 	{
-		goto cleanup;
+		goto exit1;
 	}
 
 	Program *previewProgram = nullptr;
@@ -885,50 +845,65 @@ void loadProject(MemStack& permMem, MemStack& scratchMem, ApplicationState& app)
 	if (previewProgram == nullptr)
 	{
 //TODO report error - could not find user program
-		goto cleanup;
+		goto exit1;
 	}
 
-//TODO this loop is just to get things working for now. It should
-// be loading whatever the user gives us, rather than picking an
-// arbitrary vertex and fragment shader.
-	Shader *vertShader = nullptr;
-	Shader *fragShader = nullptr;
-	for (u32 i = 0; i < previewProgram->attachedShaderCount; ++i)
+	bool shaderCompilesSuccessful = true;
+	auto shaderCount = previewProgram->attachedShaderCount;
+	auto shaders = memStackPushArray(app.scratchMem, GLint, shaderCount);
+	auto errorStringBuilder = beginPackedString(app.permMem);
+	for (u32 i = 0; i < shaderCount; ++i)
 	{
-		auto pShader = previewProgram->attachedShaders[i];
-		if (pShader->type == ShaderType::Vertex)
+		auto shader = previewProgram->attachedShaders[i];
+		auto glShader = glCreateShader(glShaderType(shader->type));
+		shaders[i] = glShader;
+
+		auto shaderSource = unpackString(shader->source);
+//TODO there is no guarantee that the shader source will fit in a GLint - bulletproof this
+		auto shaderSourceLength = (GLint) stringSliceLength(shaderSource);
+		glShaderSource(glShader, 1, (GLchar**) &shaderSource.begin, &shaderSourceLength);
+		glCompileShader(glShader);
+		if (!shaderCompileSuccessful(glShader))
 		{
-			vertShader = pShader;
+			memStackPushCString(app.permMem, "Compile errors in shader '");
+			memStackPushString(app.permMem, unpackString(shader->name));
+			memStackPushCString(app.permMem, "':\n");
+			readShaderLog(app.permMem, glShader);
+			memStackPushCString(app.permMem, "\n");
+			shaderCompilesSuccessful = false;
 		}
-		if (pShader->type == ShaderType::Fragment)
-		{
-			fragShader = pShader;
-		}
-	}
-	if (vertShader == nullptr || fragShader == nullptr)
-	{
-		goto cleanup;
+
+		glAttachShader(app.previewRenderConfig.program, glShader);
 	}
 
-	auto vertShaderSource = unpackString(vertShader->source);
-	loadUserShader(permMem, app.userRenderConfig.vertShader, vertShaderSource, app.vertShaderErrors);
-
-	auto fragShaderSource = unpackString(fragShader->source);
-	loadUserShader(permMem, app.userRenderConfig.fragShader, fragShaderSource, app.fragShaderErrors);
-
-	if (app.vertShaderErrors.begin != nullptr || app.fragShaderErrors.begin != nullptr)
+	if (!shaderCompilesSuccessful)
 	{
-		goto cleanup;
+		app.previewProgramErrors = endPackedString(app.permMem, errorStringBuilder);
+		goto exit2;
 	}
 	
-	glLinkProgram(app.userRenderConfig.program);
-	if (!programLinkSuccessful(app.userRenderConfig.program))
+	glLinkProgram(app.previewRenderConfig.program);
+	if (!programLinkSuccessful(app.previewRenderConfig.program))
 	{
-		app.programErrors = readProgramLog(permMem, app.userRenderConfig.program);
+		memStackPushCString(app.permMem, "Program link failed:\n");
+		readProgramLog(app.permMem, app.previewRenderConfig.program);
+		app.previewProgramErrors = endPackedString(app.permMem, errorStringBuilder);
+		goto exit2;
 	}
 
-cleanup:
-	memStackPop(scratchMem, memMarker);
+	endPackedString(app.permMem, errorStringBuilder);
+	app.previewProgramErrors = PackedString{nullptr};
+
+exit2:
+	for (u32 i = 0; i < shaderCount; ++i)
+	{
+		auto shader = shaders[i];
+		glDetachShader(app.previewRenderConfig.program, shader);
+		glDeleteShader(shader);
+	}
+
+exit1:
+	memStackPop(app.scratchMem, memMarker);
 }
 
 void pushSingleTextLine(MemStack& mem, StringSlice str)
@@ -960,7 +935,7 @@ void updateApplication(ApplicationState& appState)
 	processKeyBuffer(appState);
 	if (appState.loadProject)
 	{
-		loadProject(appState.permMem, appState.scratchMem, appState);
+		loadProject(appState);
 		appState.loadProject = false;
 	}
 
@@ -997,22 +972,21 @@ void updateApplication(ApplicationState& appState)
 	fillOpaqueRectangle(commandInputArea, commandAreaColor);
 	glDisable(GL_SCISSOR_TEST);
 
+//TODO make sure the preview shader is valid before drawing it
 	glViewport(
 		previewArea.min.x,
 		previewArea.min.y,
 		rectWidth(previewArea),
 		rectHeight(previewArea));
-	glBindVertexArray(appState.userRenderConfig.vao);
-	glUseProgram(appState.userRenderConfig.program);
+	glBindVertexArray(appState.previewRenderConfig.vao);
+	glUseProgram(appState.previewRenderConfig.program);
 	glDrawArrays(GL_TRIANGLES, 0, 3);
 
 	glViewport(0, 0, windowWidth, windowHeight);
 
 	if (appState.readProjectFileError.begin != nullptr
 		|| appState.projectErrorStringCount > 0
-		|| appState.vertShaderErrors.begin != nullptr
-		|| appState.fragShaderErrors.begin != nullptr
-		|| appState.programErrors.begin != nullptr)
+		|| appState.previewProgramErrors.ptr != nullptr)
 	{
 		auto windowWidthF = (float) appState.windowWidth;
 		auto windowHeightF = (float) appState.windowHeight;
@@ -1060,22 +1034,9 @@ void updateApplication(ApplicationState& appState)
 			}
 		}
 
-		if (appState.vertShaderErrors.begin != nullptr)
+		if (appState.previewProgramErrors.ptr != nullptr)
 		{
-			pushSingleTextLine(appState.scratchMem, stringSliceFromCString("Errors in vertex shader:"));
-			pushMultiTextLine(appState.scratchMem, appState.vertShaderErrors);
-		}
-
-		if (appState.fragShaderErrors.begin != nullptr)
-		{
-			pushSingleTextLine(appState.scratchMem, stringSliceFromCString("Errors in fragment shader:"));
-			pushMultiTextLine(appState.scratchMem, appState.fragShaderErrors);
-		}
-
-		if (appState.programErrors.begin != nullptr)
-		{
-			pushSingleTextLine(appState.scratchMem, stringSliceFromCString("Errors in program:"));
-			pushMultiTextLine(appState.scratchMem, appState.programErrors);
+			pushMultiTextLine(appState.scratchMem, unpackString(appState.previewProgramErrors));
 		}
 
 		auto infoLogTextLinesEnd = (TextLine*) appState.scratchMem.top;
