@@ -655,11 +655,164 @@ void loadUserShader(MemStack& mem, GLint shader, StringSlice source, StringSlice
 	}
 }
 
+static char* projectErrorTypeToString(ProjectErrorType errorType)
+{
+	switch (errorType)
+	{
+	case ProjectErrorType::MissingVersionStatement:
+		return "First statement in document should be a 'Version' statement";
+	case ProjectErrorType::VersionInvalidFormat:
+		return "Version number is not correctly formatted. It should have the syntax \"Major.Minor\", where \"Major\" and \"Minor\" are numbers";
+	case ProjectErrorType::UnsupportedVersion:
+		return "Unsupported version - this parser only supports version 1.0";
+	case ProjectErrorType::UnknownValueType:
+		return "Unknown type for value";
+	case ProjectErrorType::MissingHereStringMarker:
+		return "Expected marker token for here string";
+	case ProjectErrorType::UnclosedHereStringMarker:
+		return "Unclosed here string marker. Markers must be closed with a ':'";
+	case ProjectErrorType::HereStringMarkerWhitespace:
+		return "Here string markers contains whitespace";
+	case ProjectErrorType::EmptyHereStringMarker:
+		return "Here string marker is empty";
+	case ProjectErrorType::UnclosedHereString:
+		return "Here string not closed. Make sure its marker ends with a ':'";
+	case ProjectErrorType::ShaderMissingIdentifier:
+		return "Expected name for shader";
+	case ProjectErrorType::ProgramMissingShaderList:
+		return "Expected a shader list to follow the program name";
+	case ProjectErrorType::ProgramUnclosedShaderList:
+		return "Unclosed attached shader list";
+	case ProjectErrorType::DuplicateShaderName:
+		return "Another shader in this project has the same name";
+	case ProjectErrorType::DuplicateProgramName:
+		return "Another program in this project has the same name";
+	case ProjectErrorType::ProgramExceedsAttachedShaderLimit:
+		return "Programs cannot have more than 255 shaders attached";
+	case ProjectErrorType::ProgramUnresolvedShaderIdent:
+		return "No shader with this name exists in this project";
+	default:
+		unreachable();
+		return "???";
+	}
+}
+
+static void stringifyProjectErrors(
+	ApplicationState& app, StringSlice projectText, ProjectErrors const& errors)
+{
+	auto memMarker = memStackMark(app.scratchMem);
+
+	// scan through the project text to find line boundaries
+	u32 lineCount = 0;
+	char extraLineCharacter;
+	auto lines = (StringSlice*) app.scratchMem.top;
+	{
+		auto lineBegin = projectText.begin;
+		auto cursor = projectText.begin;
+		while (cursor != projectText.end)
+		{
+			switch (*cursor)
+			{
+			case '\n':
+				extraLineCharacter = '\r';
+				break;
+			case '\r':
+				extraLineCharacter = '\n';
+				break;
+			default:
+				++cursor;
+				continue;
+			}
+
+			auto lineBounds = memStackPushType(app.scratchMem, StringSlice);
+			lineBounds->begin = lineBegin;
+			lineBounds->end = cursor;
+			++lineCount;
+			++cursor;
+			if (cursor == projectText.end)
+			{
+				break;
+			}
+			if (*cursor == extraLineCharacter)
+			{
+				++cursor;
+			}
+			lineBegin = cursor;
+		}
+	}
+
+	app.projectErrorStrings = app.permMem.top;
+	app.projectErrorStringCount = 0;
+
+	char *unused1;
+	u32 unused2;
+	for (u32 errorIdx = 0; errorIdx < errors.count; ++errorIdx)
+	{
+		auto error = errors.ptr[errorIdx];
+
+		// the number of lines above/below the error to display for context
+		u32 contextLineCount = 2;
+
+		u32 firstContextLineIdx;
+		firstContextLineIdx = error.location.lineNumber;
+		if (error.location.lineNumber > contextLineCount)
+		{
+			firstContextLineIdx = error.location.lineNumber - contextLineCount;
+		}
+		--firstContextLineIdx;
+
+		u32 lastContextLineIdx = error.location.lineNumber + contextLineCount;
+		if (lastContextLineIdx > lineCount)
+		{
+			lastContextLineIdx = lineCount;
+		}
+
+		{
+			auto stringBuilder = beginPackedString(app.permMem);
+			memStackPushCString(app.permMem, "Line ");
+			u32ToString(app.permMem, error.location.lineNumber, unused1, unused2);
+			memStackPushCString(app.permMem, ", char ");
+			u32ToString(app.permMem, error.location.charNumber, unused1, unused2);
+			endPackedString(app.permMem, stringBuilder);
+		}
+		++app.projectErrorStringCount;
+
+		packCString(app.permMem, projectErrorTypeToString(error.type));
+		++app.projectErrorStringCount;
+
+		packCString(app.permMem, ">>>>>");
+		++app.projectErrorStringCount;
+
+		for (u32 i = firstContextLineIdx; i < lastContextLineIdx; ++i)
+		{
+			auto lineBounds = lines[i];
+
+			{
+				auto stringBuilder = beginPackedString(app.permMem);
+				u32ToString(app.permMem, i + 1, unused1, unused2);
+				memStackPushCString(app.permMem, " | ");
+				memStackPushString(app.permMem, lineBounds);
+				endPackedString(app.permMem, stringBuilder);
+			}
+			++app.projectErrorStringCount;
+		}
+
+		packCString(app.permMem, ">>>>>");
+		++app.projectErrorStringCount;
+
+		packCString(app.permMem, "");
+		++app.projectErrorStringCount;
+	}
+
+	memStackPop(app.scratchMem, memMarker);
+}
+
 void loadProject(MemStack& permMem, MemStack& scratchMem, ApplicationState& app)
 {
 	memStackClear(permMem);
 	app.readProjectFileError = {};
-	app.projectErrors = {};
+	app.projectErrorStrings = nullptr;
+	app.projectErrorStringCount = 0;
 	app.vertShaderErrors = {};
 	app.fragShaderErrors = {};
 	app.programErrors = {};
@@ -704,13 +857,16 @@ void loadProject(MemStack& permMem, MemStack& scratchMem, ApplicationState& app)
 
 	{
 		StringSlice projectText{(char*) fileContents, (char*) fileContents + fileSize}; 
-		app.project = parseProject(scratchMem, permMem, projectText, app.projectErrors);
+		ProjectErrors projectErrors = {};
+		app.project = parseProject(scratchMem, permMem, projectText, projectErrors);
+		if (projectErrors.count != 0)
+		{
+			stringifyProjectErrors(app, projectText, projectErrors);
+			goto cleanup;
+		}
 	}
+	
 
-	if (app.projectErrors.count != 0)
-	{
-		goto cleanup;
-	}
 
 	if (stringSliceLength(app.previewProgramName) == 0)
 	{
@@ -799,48 +955,6 @@ void pushMultiTextLine(MemStack& mem, StringSlice str)
 	textLine->text = StringSlice{lineBegin, str.end};
 }
 
-char* projectErrorTypeToString(ProjectErrorType errorType)
-{
-	switch (errorType)
-	{
-	case ProjectErrorType::MissingVersionStatement:
-		return "First statement in document should be a 'Version' statement";
-	case ProjectErrorType::VersionInvalidFormat:
-		return "Version number is not correctly formatted. It should have the syntax \"Major.Minor\", where \"Major\" and \"Minor\" are numbers";
-	case ProjectErrorType::UnsupportedVersion:
-		return "Unsupported version - this parser only supports version 1.0";
-	case ProjectErrorType::UnknownValueType:
-		return "Unknown type for value";
-	case ProjectErrorType::MissingHereStringMarker:
-		return "Expected marker token for here string";
-	case ProjectErrorType::UnclosedHereStringMarker:
-		return "Unclosed here string marker. Markers must be closed with a ':'";
-	case ProjectErrorType::HereStringMarkerWhitespace:
-		return "Here string markers contains whitespace";
-	case ProjectErrorType::EmptyHereStringMarker:
-		return "Here string marker is empty";
-	case ProjectErrorType::UnclosedHereString:
-		return "Here string not closed. Make sure its marker ends with a ':'";
-	case ProjectErrorType::ShaderMissingIdentifier:
-		return "Expected name for shader";
-	case ProjectErrorType::ProgramMissingShaderList:
-		return "Expected a shader list to follow the program name";
-	case ProjectErrorType::ProgramUnclosedShaderList:
-		return "Unclosed attached shader list";
-	case ProjectErrorType::DuplicateShaderName:
-		return "Another shader in this project has the same name";
-	case ProjectErrorType::DuplicateProgramName:
-		return "Another program in this project has the same name";
-	case ProjectErrorType::ProgramExceedsAttachedShaderLimit:
-		return "Programs cannot have more than 255 shaders attached";
-	case ProjectErrorType::ProgramUnresolvedShaderIdent:
-		return "No shader with this name exists in this project";
-	default:
-		unreachable();
-		return "???";
-	}
-}
-
 void updateApplication(ApplicationState& appState)
 {
 	processKeyBuffer(appState);
@@ -895,7 +1009,7 @@ void updateApplication(ApplicationState& appState)
 	glViewport(0, 0, windowWidth, windowHeight);
 
 	if (appState.readProjectFileError.begin != nullptr
-		|| appState.projectErrors.count > 0
+		|| appState.projectErrorStringCount > 0
 		|| appState.vertShaderErrors.begin != nullptr
 		|| appState.fragShaderErrors.begin != nullptr
 		|| appState.programErrors.begin != nullptr)
@@ -917,25 +1031,6 @@ void updateApplication(ApplicationState& appState)
 
 	auto memMarker = memStackMark(appState.scratchMem);
 
-	auto projectErrorLocations = memStackPushArray(
-		appState.scratchMem, PackedString, appState.projectErrors.count);
-	for (u32 i = 0; i < appState.projectErrors.count; ++i)
-	{
-		auto error = appState.projectErrors.ptr[i];
-
-		char *unused1;
-		u32 unused2;
-
-		auto lineBuilder = beginPackedString(appState.scratchMem);
-		memStackPushCString(appState.scratchMem, "Line ");
-		u32ToString(appState.scratchMem, error.lineNumber, unused1, unused2);
-		memStackPushCString(appState.scratchMem, ", char ");
-		u32ToString(appState.scratchMem, error.charNumber, unused1, unused2);
-		auto line = endPackedString(appState.scratchMem, lineBuilder);
-
-		projectErrorLocations[i] = line;
-	}
-
 	auto textLinesBegin = (TextLine*) appState.scratchMem.top;
 	{
 		auto commandLineText = memStackPushType(appState.scratchMem, TextLine);
@@ -953,20 +1048,15 @@ void updateApplication(ApplicationState& appState)
 			pushMultiTextLine(appState.scratchMem, appState.readProjectFileError);
 		}
 
-		if (appState.projectErrors.count > 0)
+		if (appState.projectErrorStringCount > 0)
 		{
 			pushSingleTextLine(appState.scratchMem, stringSliceFromCString("Errors in project file:"));
-			for (u32 i = 0; i < appState.projectErrors.count; ++i)
+			auto ptr = (u8*) appState.projectErrorStrings;
+			for (u32 i = 0; i < appState.projectErrorStringCount; ++i)
 			{
-				pushSingleTextLine(appState.scratchMem, unpackString(projectErrorLocations[i]));
-				auto error = appState.projectErrors.ptr[i];
-				auto errorMessage = projectErrorTypeToString(error.type);
-				pushSingleTextLine(appState.scratchMem, stringSliceFromCString(errorMessage));
-				pushSingleTextLine(appState.scratchMem, stringSliceFromCString(">>>>>"));
-				pushMultiTextLine(appState.scratchMem, unpackString(error.context));
-				pushSingleTextLine(appState.scratchMem, stringSliceFromCString(">>>>>"));
-				StringSlice emptyString = {};
-				pushSingleTextLine(appState.scratchMem, emptyString);
+				auto line = unpackString(PackedString{ptr});
+				pushSingleTextLine(appState.scratchMem, line);
+				ptr += sizeof(size_t) + stringSliceLength(line);
 			}
 		}
 

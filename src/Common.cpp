@@ -135,12 +135,12 @@ bool operator!=(StringSlice lhs, const char* rhs)
 	return !(lhs == rhs);
 }
 
-inline char* memStackPushString(MemStack& mem, StringSlice str)
+inline StringSlice memStackPushString(MemStack& mem, StringSlice str)
 {
 	size_t stringLength = stringSliceLength(str);
 	auto ptr = memStackPushArray(mem, char, stringLength);
 	memcpy(ptr, str.begin, stringLength);
-	return ptr;
+	return StringSlice{ptr, ptr + stringLength};
 }
 
 inline StringSlice memStackPushCString(MemStack& mem, char *str)
@@ -183,12 +183,31 @@ inline PackedString packString(MemStack& mem, StringSlice str)
 	return PackedString{ptr};
 }
 
+inline PackedString packCString(MemStack& mem, char* str)
+{
+	auto sizePtr = memStackPushType(mem, size_t);
+	auto p = str;
+	while (*p != '\0')
+	{
+		auto pChar = memStackPushType(mem, char);
+		*pChar = *p;
+		++p;
+	}
+	*sizePtr = p - str;
+	return PackedString{sizePtr};
+}
+
 inline StringSlice unpackString(PackedString str)
 {
 	auto sizePtr = (size_t*) str.ptr;
 	auto begin = (char*) (sizePtr + 1);
 	auto end = begin + (*sizePtr);
 	return StringSlice{begin, end};
+}
+
+inline size_t packedStringLength(PackedString str)
+{
+	return *((size_t*) str.ptr);
 }
 
 void u32ToString(MemStack& mem, u32 value, char*& result, u32& length)

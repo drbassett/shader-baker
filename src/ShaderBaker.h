@@ -97,7 +97,8 @@ struct ApplicationState
 	StringSlice previewProgramName;
 //TODO concatenate these error types at project load time
 	StringSlice readProjectFileError;
-	ProjectErrors projectErrors;
+	void *projectErrorStrings;
+	u32 projectErrorStringCount;
 	StringSlice vertShaderErrors;
 	StringSlice fragShaderErrors;
 	StringSlice programErrors;

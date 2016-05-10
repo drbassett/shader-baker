@@ -585,95 +585,16 @@ Project parseProject(MemStack& permMem, MemStack& scratchMem, StringSlice projec
 	project = {};
 	
 returnResult:
-	// Scan through the project text to find line boundaries. This could have
-	// been done while the project text was parsed, but most of the time
-	// projects will not have any errors, so this code will never get executed
-	// anyways. Doing it while parsing adds extra complexity and will usually
-	// be a waste of time.
-	u32 lineCount = 0;
-	char extraLineCharacter;
-	auto lines = (StringSlice*) scratchMem.top;
-	{
-		auto lineBegin = projectText.begin;
-		auto cursor = projectText.begin;
-		while (cursor != projectText.end)
-		{
-			switch (*cursor)
-			{
-			case '\n':
-				extraLineCharacter = '\r';
-				break;
-			case '\r':
-				extraLineCharacter = '\n';
-				break;
-			default:
-				++cursor;
-				continue;
-			}
-
-			auto lineBounds = memStackPushType(scratchMem, StringSlice);
-			lineBounds->begin = lineBegin;
-			lineBounds->end = cursor;
-			++lineCount;
-			++cursor;
-			if (cursor == projectText.end)
-			{
-				break;
-			}
-			if (*cursor == extraLineCharacter)
-			{
-				++cursor;
-			}
-			lineBegin = cursor;
-		}
-	}
-
 	errors.count = parser.errorCount;
 	errors.ptr = memStackPushArray(permMem, ProjectError, parser.errorCount);
+	auto pError = parser.errors;
+	u32 i = 0;
+	while (pError != nullptr)
 	{
-		auto pError = parser.errors;
-		auto errorIdx = parser.errorCount - 1; 
-		while (pError != nullptr)
-		{
-			auto errorLineNumber = pError->location.lineNumber;
-			u32 contextLineCount = 2;
-
-			u32 firstContextLineIdx;
-			firstContextLineIdx = errorLineNumber;
-			if (errorLineNumber > contextLineCount)
-			{
-				firstContextLineIdx = errorLineNumber - contextLineCount;
-			}
-			--firstContextLineIdx;
-
-			u32 lastContextLineIdx = errorLineNumber + contextLineCount;
-			if (lastContextLineIdx > lineCount)
-			{
-				lastContextLineIdx = lineCount;
-			}
-
-			auto stringBuilder = beginPackedString(permMem);
-			for (u32 i = firstContextLineIdx; i < lastContextLineIdx; ++i)
-			{
-				auto lineBounds = lines[i];
-
-				char *unused1;
-				u32 unused2;
-				u32ToString(permMem, i + 1, unused1, unused2);
-				memStackPushCString(permMem, " | ");
-				memStackPushString(permMem, lineBounds);
-				memStackPushCString(permMem, "\n");
-			}
-			auto contextString = endPackedString(permMem, stringBuilder);
-
-			errors.ptr[errorIdx].type = pError->type;
-			errors.ptr[errorIdx].lineNumber = pError->location.lineNumber;
-			errors.ptr[errorIdx].charNumber = pError->location.charNumber;
-			errors.ptr[errorIdx].context = contextString;
-
-			pError = pError->next;
-			--errorIdx;
-		}
+		 errors.ptr[i].type = pError->type;
+		 errors.ptr[i].location = pError->location;
+		 pError = pError->next;
+		 ++i;
 	}
 
 	return project;

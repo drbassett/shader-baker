@@ -124,8 +124,7 @@ struct Project
 struct ProjectError
 {
 	ProjectErrorType type;
-	u32 lineNumber, charNumber;
-	PackedString context;
+	TextLocation location;
 };
 
 struct ProjectErrors
