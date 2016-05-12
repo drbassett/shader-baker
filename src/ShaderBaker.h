@@ -85,15 +85,20 @@ struct ApplicationState
 
 	unsigned windowWidth, windowHeight;
 
+//TODO put this in the permanent memory
 	char commandLine[256];
 	size_t commandLineLength, commandLineCapacity;
 
 	MicroSeconds currentTime;
 
 	bool loadProject;
-	FilePath projectPath;
 	Project project;
+//TODO put this in the permanent memory
+	char previewProgramNameStorage[256];
 	StringSlice previewProgramName;
+//TODO put this in the permanent memory
+	char projectPathStorage[256];
+	FilePath projectPath;
 //TODO concatenate these error types at project load time
 	StringSlice readProjectFileError;
 	void *projectErrorStrings;

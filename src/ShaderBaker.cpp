@@ -525,57 +525,6 @@ static inline void fillRectangle(
 	glUniform4fv(renderConfig.unifColor, 1, color);
 	glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 } 
-static inline void processCommand(ApplicationState& appState)
-{
-	auto command = StringSlice{
-		appState.commandLine,
-		appState.commandLine + appState.commandLineLength};
-	appState.commandLineLength = 0;
-
-	if (command == "set-color")
-	{
-		glClearColor(0.2f, 0.15f, 0.15f, 1.0f);
-	} else
-	{
-//TODO handle unknown command
-	}
-}
-
-static inline void processKeyBuffer(ApplicationState& appState)
-{
-	auto pKey = appState.keyBuffer;
-	auto pEnd = appState.keyBuffer + appState.keyBufferLength;
-
-	while (pKey != pEnd)
-	{
-		auto key = *pKey;
-
-		switch (key)
-		{
-		case '\b':
-		{
-			if (appState.commandLineLength > 0)
-			{
-				--appState.commandLineLength;
-			}
-		} break;
-		case '\r':
-		{
-			processCommand(appState);
-		} break;
-		default:
-		{
-			if (appState.commandLineLength < appState.commandLineCapacity)
-			{
-				appState.commandLine[appState.commandLineLength] = key;
-				++appState.commandLineLength;
-			}
-		} break;
-		}
-
-		++pKey;
-	}
-}
 
 StringSlice readShaderLog(MemStack& mem, GLint shader)
 {
@@ -771,6 +720,10 @@ GLuint glShaderType(ShaderType type)
 	return GL_VERTEX_SHADER;
 }
 
+void initPreviewProgram(ApplicationState& app)
+{
+}
+
 void loadProject(ApplicationState& app)
 {
 	memStackClear(app.permMem);
@@ -904,6 +857,147 @@ exit2:
 
 exit1:
 	memStackPop(app.scratchMem, memMarker);
+}
+
+static inline void processCommand(ApplicationState& app)
+{
+	auto command = StringSlice{
+		app.commandLine,
+		app.commandLine + app.commandLineLength};
+	app.commandLineLength = 0;
+
+	auto memMarker = memStackMark(app.scratchMem);
+
+	auto args = (StringSlice*) app.scratchMem.top;
+	u32 argCount = 0;
+	auto p = command.begin;
+	while (p != command.end)
+	{
+		auto argBegin = p;
+		switch (*p)
+		{
+		case ' ':
+		case '\t':
+			++p;
+			break;
+		default:
+			for (;;)
+			{
+				bool pushArg;
+				if (p == command.end)
+				{
+					pushArg = true;
+				} else
+				{
+					switch (*p)
+					{
+					case ' ':
+					case '\t':
+						pushArg = true;
+						break;
+					default:
+						pushArg = false;
+					}
+				}
+
+				if (pushArg)
+				{
+					assert(argBegin != p);
+					auto arg = memStackPushType(app.scratchMem, StringSlice);
+					arg->begin = argBegin;
+					arg->end = p;
+					++argCount;
+					break;
+				}
+
+				++p;
+			}
+		}
+	}
+
+	if (argCount == 0)
+	{
+		return;
+	}
+	
+//TODO should extra argments be ignored, or reported as errors?
+	auto firstArg = args[0];
+	if (firstArg == "load-project")
+	{
+//TODO paths with spaces?
+//TODO relative paths?
+		if (argCount >= 2)
+		{
+			auto fileNameArg = args[1];
+			auto fileNameLength = stringSliceLength(fileNameArg);
+			assert(fileNameLength <= sizeof(app.projectPathStorage));
+			memcpy(app.projectPathStorage, fileNameArg.begin, fileNameLength);
+			app.projectPath.path.begin = app.projectPathStorage;
+			app.projectPath.path.end = app.projectPathStorage + fileNameLength;
+			loadProject(app);
+		} else
+		{
+//TODO handle missing file path argument
+		}
+	} else if (firstArg == "preview-program")
+	{
+		if (argCount >= 2)
+		{
+			auto programNameArg = args[1];
+			auto nameLength = stringSliceLength(programNameArg);
+			assert(nameLength <= sizeof(app.previewProgramNameStorage));
+			memcpy(app.previewProgramNameStorage, programNameArg.begin, nameLength);
+			app.previewProgramName.begin = app.previewProgramNameStorage;
+			app.previewProgramName.end = app.previewProgramNameStorage + nameLength;
+//TODO reloading the whole project works, but it is overkill.
+// Add a procedure to just set the preview program
+			loadProject(app);
+		} else
+		{
+//TODO handle missing argument
+		}
+	} else
+	{
+//TODO handle unknown command
+	}
+
+	memStackPop(app.scratchMem, memMarker);
+}
+
+static inline void processKeyBuffer(ApplicationState& appState)
+{
+	auto pKey = appState.keyBuffer;
+	auto pEnd = appState.keyBuffer + appState.keyBufferLength;
+
+	while (pKey != pEnd)
+	{
+		auto key = *pKey;
+
+		switch (key)
+		{
+		case '\b':
+		{
+			if (appState.commandLineLength > 0)
+			{
+				--appState.commandLineLength;
+			}
+		} break;
+		case '\r':
+		{
+			processCommand(appState);
+		} break;
+		default:
+		{
+			if (appState.commandLineLength < appState.commandLineCapacity)
+			{
+				appState.commandLine[appState.commandLineLength] = key;
+				++appState.commandLineLength;
+			}
+		} break;
+		}
+
+		++pKey;
+	}
 }
 
 void pushSingleTextLine(MemStack& mem, StringSlice str)
