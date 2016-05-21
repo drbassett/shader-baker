@@ -1,19 +1,12 @@
 #pragma once
 
-struct MemStack
-{
-	u8 *begin, *top, *end;
-};
-
-struct MemStackMarker
-{
-	u8 *p;
-};
-
-struct StringSlice
-{
-	char *begin, *end;
-};
+#include "Types.h"
+#include "Platform.h"
+#include "Common.cpp"
+#include "Project.cpp"
+#include <gl/gl.h>
+#include "../include/glcorearb.h"
+#include "generated/glFunctions.cpp"
 
 struct TextLine
 {
@@ -55,10 +48,9 @@ struct TextRenderConfig
 	GLint attribLowerLeft, attribCharacterIndex;
 };
 
-struct UserRenderConfig
+struct PreviewRenderConfig
 {
 	GLuint vao;
-	GLint vertShader, fragShader;
 	GLuint program;
 };
 
@@ -67,25 +59,14 @@ struct MicroSeconds
 	u64 value;
 };
 
-struct FilePath
+struct Vec2I32
 {
-	StringSlice path;
+	i32 x, y;
 };
 
-struct InfoLogTextChunk
+struct RectI32
 {
-	u32 count;
-	InfoLogTextChunk *next;
-	char text[1024];
-};
-
-struct InfoLogErrors
-{
-	InfoLogTextChunk
-		*vertShaderErrors,
-		*fragShaderErrors,
-		*programErrors,
-		*freeList;
+	Vec2I32 min, max;
 };
 
 struct ApplicationState
@@ -97,30 +78,31 @@ struct ApplicationState
 	FillRectRenderConfig fillRectRenderConfig;
 	TextRenderConfig textRenderConfig;
 
-	bool loadUserRenderConfig;
-	FilePath userFragShaderPath, userVertShaderPath;
-	UserRenderConfig userRenderConfig;
-
-	InfoLogErrors infoLogErrors;
+	PreviewRenderConfig previewRenderConfig;
 
 	char *keyBuffer;
 	size_t keyBufferLength;
 
 	unsigned windowWidth, windowHeight;
 
+//TODO put this in the permanent memory
 	char commandLine[256];
 	size_t commandLineLength, commandLineCapacity;
 
 	MicroSeconds currentTime;
-};
 
-struct Vec2I32
-{
-	i32 x, y;
-};
-
-struct RectI32
-{
-	Vec2I32 min, max;
+	bool loadProject;
+	Project project;
+//TODO put this in the permanent memory
+	char previewProgramNameStorage[256];
+	StringSlice previewProgramName;
+//TODO put this in the permanent memory
+	char projectPathStorage[256];
+	FilePath projectPath;
+//TODO concatenate these error types at project load time
+	StringSlice readProjectFileError;
+	void *projectErrorStrings;
+	u32 projectErrorStringCount;
+	PackedString previewProgramErrors;
 };
 

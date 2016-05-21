@@ -1,12 +1,9 @@
 #pragma warning(push, 3)
-
 #include <windows.h>
-
 #pragma warning(pop)
 
 #include "ShaderBaker.cpp"
 #include "../include/wglext.h"
-#include <cstdio>
 
 //TODO printf does not work with Win32 GUI out of the box. Need to do something with AttachConsole/AllocConsole to make it work.
 #define FATAL(message) printf(message); return 1;
@@ -28,7 +25,6 @@ static HANDLE openFile(MemStack& scratchMem, FilePath const filePath)
 	memcpy(fileNameCString, filePath.path.begin, filePathLength);
 	fileNameCString[filePathLength] = 0;
 	return CreateFileA(fileNameCString, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
-	
 }
 
 static ReadFileError getReadFileError()
@@ -326,19 +322,6 @@ void toHexString(u64 value, char *str)
 	*str = '\0';
 }
 
-static bool isWhitespace(char c)
-{
-	switch (c)
-	{
-	case ' ':
-	case '\t':
-	case '\n':
-	case '\r':
-		return true;
-	}
-	return false;
-}
-
 static char* skipWhitespace(char *ptr)
 {
 	for (;;)
@@ -353,7 +336,7 @@ static char* skipWhitespace(char *ptr)
 	return ptr;
 }
 
-static char* readArg(char *ptr, StringSlice& result)
+static void readArg(char*& ptr, StringSlice& result)
 {
 	ptr = skipWhitespace(ptr);
 	result.begin = ptr;
@@ -367,7 +350,6 @@ static char* readArg(char *ptr, StringSlice& result)
 		++ptr;
 	}
 	result.end = ptr;
-	return ptr;
 }
 
 int CALLBACK WinMain(
@@ -376,14 +358,6 @@ int CALLBACK WinMain(
 	LPSTR lpCmdLine,
 	int nCmdShow)
 {
-	FilePath userVertShaderPath = {};
-	FilePath userFragShaderPath = {};
-	{
-		auto commandLinePtr = lpCmdLine;
-		commandLinePtr = readArg(commandLinePtr, userVertShaderPath.path);
-		commandLinePtr = readArg(commandLinePtr, userFragShaderPath.path);
-	}
-
 	const char windowClassName[] = "Shader Baker Class";
 
 	WNDCLASS wc = {};
@@ -425,16 +399,25 @@ int CALLBACK WinMain(
 
 	appState.keyBuffer = keyBuffer;
 
-	if (stringSliceLength(userVertShaderPath.path) != 0
-		&& stringSliceLength(userFragShaderPath.path) != 0)
 	{
-		appState.userVertShaderPath = userVertShaderPath;
-		appState.userFragShaderPath = userFragShaderPath;
-		appState.loadUserRenderConfig = true;
+		StringSlice arg1 = {};
+		StringSlice arg2 = {};
+		auto commandLinePtr = lpCmdLine;
+		readArg(commandLinePtr, arg1);
+		readArg(commandLinePtr, arg2);
+
+		if (stringSliceLength(arg1) != 0)
+		{
+			appState.projectPath = FilePath{arg1};
+			if (stringSliceLength(arg2) != 0)
+			{
+				appState.previewProgramName = arg2;
+			}
+			appState.loadProject = true;
+		}
 	}
 
-	FILETIME lastVertShaderWriteTime = {};
-	FILETIME lastFragShaderWriteTime = {};
+	FILETIME lastProjectFileWriteTime = {};
 
 	LARGE_INTEGER qpcFreq;
 	QueryPerformanceFrequency(&qpcFreq);
@@ -460,27 +443,15 @@ int CALLBACK WinMain(
 		{
 			auto memMarker = memStackMark(appState.scratchMem);
 			FILETIME writeTime = {};
-
-			if (!getFileWriteTime(appState.scratchMem, userVertShaderPath, writeTime))
+			if (!getFileWriteTime(appState.scratchMem, appState.projectPath, writeTime))
 			{
 				writeTime = {};
 			}
-			if (!fileTimesEqual(writeTime, lastVertShaderWriteTime))
+			if (!fileTimesEqual(writeTime, lastProjectFileWriteTime))
 			{
-				lastVertShaderWriteTime = writeTime;
-				appState.loadUserRenderConfig = true;
+				lastProjectFileWriteTime = writeTime;
+				appState.loadProject = true;
 			}
-
-			if (!getFileWriteTime(appState.scratchMem, userFragShaderPath, writeTime))
-			{
-				writeTime = {};
-			}
-			if (!fileTimesEqual(writeTime, lastFragShaderWriteTime))
-			{
-				lastFragShaderWriteTime = writeTime;
-				appState.loadUserRenderConfig = true;
-			}
-
 			memStackPop(appState.scratchMem, memMarker);
 		}
 

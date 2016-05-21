@@ -1,3 +1,7 @@
+Version 1.0
+
+VertexShader vs
+---:
 #version 330
 
 out vec3 vertColor;
@@ -17,3 +21,21 @@ void main()
     gl_Position = vec4(positions[gl_VertexID], 0.0f, 1.0f);
     vertColor = colors[gl_VertexID];
 }
+---
+
+FragmentShader fs
+---:
+#version 330
+
+in vec3 vertColor;
+
+out vec4 fragColor;
+
+void main()
+{
+    fragColor = vec4(vertColor, 1.0);
+}
+---
+
+Program program{vs fs}
+
